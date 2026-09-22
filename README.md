@@ -13,6 +13,26 @@ CartPole has a continuous state space.
 
 So instead of storing Q-values in a table, we train a neural network to approximate the policy and value function.
 
+## Physics model
+
+CartPole is a coupled mechanical system: a cart moves along the x-axis while a pole rotates about the pivot.
+
+The cart is driven by a horizontal force $F$, so its translational motion follows Newton’s second law:
+
+$$
+F = m_{cart} \ddot{x}
+$$
+
+The pole has rotational inertia, so its angular motion satisfies:
+
+$$
+I \ddot{\theta} = -m g l \sin(\theta) + \text{(coupling from cart motion)}
+$$
+
+with $I \approx m l^2$ for a pole of length $l$ and mass $m$. In other words, the pole resists changes in its angular motion because its mass is distributed away from the pivot.
+
+Gymnasium simulates this by stepping the dynamics numerically each time the agent acts. At every step, the environment applies the control force, integrates the cart–pole system forward in time, and returns the next state $[x, \dot{x}, \theta, \dot{\theta}]$ and the reward.
+
 In this project:
 
 - the actor network outputs action probabilities from the observed state,
