@@ -1,18 +1,19 @@
-# PPO CartPole
+# PPO Cartpole
 
-This project trains a PPO (Proximal Policy Optimization) agent to solve the classic CartPole problem inside the environment from Gymnasium.
+This project trains a PPO (Proximal Policy Optimization) agent to solve the classic CartPole problem in Gymnasium. Gymnasium simulates the cart's horizontal motion and the pole's rotational dynamics.
 
-## Why not a lookup table?
+At each time step, the agent chooses one of two actions:
+- apply a force to the left
+- apply a force to the right.
+Gymnasium uses that force to compute the physics of the system. The custom disturbance wrapper applies an additional horizontal force at the pole tip through the true dynamics before each step and can delay the observation returned to the policy.
 
-CartPole has a continuous state space.
+## Why neural networks instead of a lookup table?
 
-- State is 4 real numbers: $[x, \dot{x}, \theta, \dot{\theta}]$
-- A table-based method would require one entry for every possible combination of these values. But the continuous values make the number of possible states uncountable.
-- Instead of storing Q-values in a table, we train a neural network to approximate the policy and value function.
+Tabular RL stores $Q(s,a)$ or $V(s)$ in a lookup table and updates them with Bellman equations. Cartpole has a continuous state, $[x, \dot{x}, \theta, \dot{\theta}]$, so PPO uses neural networks and sampled trajectories instead. GAE still uses Bellman-style temporal-difference errors.
 
 ## Physics model
 
-CartPole is a simple coupled  mechanical system: a cart moves along the x-axis while a pole rotates about the pivot.
+Cartpole is a simple coupled mechanical system: a cart moves along the x-axis while a pole rotates about the pivot.
 
 The cart is driven by a horizontal force $F$, and its movement is governed by Newton’s second law:
 
@@ -26,7 +27,7 @@ $$
 I \ddot{\theta} = -m g l \sin(\theta) + \text{(coupling from cart motion)}
 $$
 
-with $I \approx m l^2$ for a pole of length $l$ and uniformly distributed mass $m_{cart}$. In other words, the pole resists changes in its angular motion because its mass is distributed away from the pivot.
+with $I \approx m l^2$ for a pole of length $l$ and mass $m$. In other words, the pole resists changes in its angular motion because its mass is distributed away from the pivot.
 
 Gymnasium simulates this by stepping the dynamics numerically each time the agent acts. At every step, the environment applies the control force, integrates the cart–pole system forward in time, and returns the next state $[x, \dot{x}, \theta, \dot{\theta}]$ and the reward.
 
