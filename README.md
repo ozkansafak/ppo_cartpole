@@ -7,7 +7,7 @@ This project trains a PPO (Proximal Policy Optimization) agent to solve the clas
 CartPole has a continuous state space.
 
 - State is 4 real numbers: $[x, \dot{x}, \theta, \dot{\theta}]$
-- These are continuous values making the number of possible states uncountable.
+- These are continuous values, hence the possible states are uncountable.
 - A table-based method would require one entry for every possible combination of these values.
 - So instead of storing Q-values in a table, we train a neural network to approximate the policy and value function.
 
@@ -43,7 +43,7 @@ This is the key idea behind modern reinforcement learning: use function approxim
 
 - `ppo_cartpole.ipynb` — full PPO implementation, training loop, diagnostics, and animation export
 - `pyproject.toml` — project dependencies
-- generated figures and animation artifacts in the project root
+- `resources/` — generated diagnostic figures and animation artifacts
 
 ## Run the notebook
 
