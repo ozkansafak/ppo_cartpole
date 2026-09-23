@@ -1,17 +1,15 @@
 # PPO CartPole
 
-This project trains a Proximal Policy Optimization (PPO) agent to solve the classic CartPole environment from Gymnasium.
+This project trains a PPO (Proximal Policy Optimization) agent to solve the classic CartPole problem inside the environment from Gymnasium.
 
 ## Why not a lookup table?
 
 CartPole has a continuous state space.
 
 - State is 4 real numbers: $[x, \dot{x}, \theta, \dot{\theta}]$
-- Each variable can take infinitely many values.
-- That means the number of possible states is effectively uncountable.
-- A table-based method would require one entry for every possible combination of these values, which is impossible.
-
-So instead of storing Q-values in a table, we train a neural network to approximate the policy and value function.
+- These are continuous values making the number of possible states uncountable.
+- A table-based method would require one entry for every possible combination of these values.
+- So instead of storing Q-values in a table, we train a neural network to approximate the policy and value function.
 
 ## Physics model
 
