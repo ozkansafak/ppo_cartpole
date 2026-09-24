@@ -8,12 +8,16 @@ At each time step, the agent chooses one of two actions:
 
 On top of standard CartPole, this project adds two complications, each implemented as a Gymnasium wrapper in the notebook:
 
-1. **External forcing** (`ExternalForcing`). A sideways force acts on the top of the pole: a harmonic push plus random impulses. It changes the cart and pole velocities through the equations of motion, and the agent never observes it. See [External forcing](#external-forcing).
-2. **Perception latency** (`PerceptionLatency`). The agent perceives the state 0.04 s late. To compensate, each observation also includes the frame before that and the actions taken since, so it can work out where the pole is now. See [Perception latency](#perception-latency).
+1. **External forcing** (`ExternalForcing`). A horizontal force acts on the top of the pole: a harmonic force plus random impulses. The agent never observes the forcing directly, but only responds to the changes in the velocities of the cart and the pole. See [External forcing](#external-forcing).
+2. **Perception latency** (`PerceptionLatency`). The agent's perception lags the true state by 0.04 s (2 time steps). To compensate, each observation contains the two most recent delayed states plus the two actions the agent has taken since, from which it can infer the current state. See [Perception latency](#perception-latency).
 
 ## Why neural networks instead of a lookup table?
 
-Tabular RL stores $Q(s,a)$ or $V(s)$ in a lookup table and updates them with Bellman equations. Cartpole has a continuous state, $[x, \dot{x}, \theta, \dot{\theta}]$, so PPO uses neural networks and sampled trajectories instead. GAE still uses Bellman-style temporal-difference errors.
+Tabular RL stores $Q(s,a)$ or $V(s)$ in a lookup table and updates them with Bellman equations. That requires a finite, reasonably small set of states.
+
+In this project, **time** is discrete (steps of $\Delta t = 0.02$ s) and the **actions** are discrete (two choices), but the **state** $[x, \dot{x}, \theta, \dot{\theta}]$ is continuous: each variable is a real number and is never binned. A lookup table would need the state discretized first, and the table grows exponentially with the number of variables. With the perception latency, each observation has 10 numbers, so even a coarse 20 bins per variable would give $20^{10} \approx 10^{13}$ cells.
+
+So PPO uses neural networks, which take the real-valued state directly and generalize between nearby states, and learns from sampled trajectories instead of sweeping over all states. GAE still uses Bellman-style temporal-difference errors.
 
 ## Physics model
 
@@ -97,6 +101,10 @@ $$
 
 The same forcing is used in training and in the GIF.
 
+![External tip force over one 10 s episode: a 0.2 N harmonic push with random impulses of up to ±1 N on top](resources/external_forcing.png)
+
+The figure shows one 10 s episode of the tip force. The blue curve is the harmonic part; the orange line is the total force actually applied, with a dot at each random impulse (20 in this episode, matching the expected $r \times 10\,\text{s} = 20$). The zoomed lower panel shows that the force is piecewise constant: each value is held for one 0.02 s step. The impulses are seeded, so the figure is reproducible; in training they are drawn fresh every episode.
+
 Over one time step $\Delta t$, $F_{tip}$ is applied as an impulse $J = F_{tip}\,\Delta t$ with generalized components $(J,\; 2 l \cos\theta\,J)$, which changes $\dot{x}$ and $\dot{\theta}$ through the mass matrix of the equations above. The impulse is applied just before Gymnasium's Euler step.
 
 For scale, the change in $\dot{\theta}$ from one step of force:
@@ -148,9 +156,9 @@ This is the key idea behind modern reinforcement learning: use function approxim
 
 ![Trained agent balancing the pole under external tip forcing](resources/cartpole_trained_rollout.gif)
 
-The GIF shows one episode of **inference** with the trained policy. It is recorded after training was completed.
+The GIF shows one episode of inference with the trained policy. 
 
-- **Deterministic policy:** at each step the agent takes its most likely action instead of sampling one as in training.
+- **Deterministic policy:** at each step the agent takes its most likely action instead of sampling one as in training: $a = \arg\max_a \pi(a \mid s)$.
 - **Same conditions as training:** the same external forcing and the same 0.04 s perception latency.
 - **Which episode:** the notebook first runs 20 evaluation episodes with fixed seeds 0–19 and prints the length of each. The GIF replays the longest one. In the current run, 18 of the 20 episodes lasted the full 500 steps (the other two failed at 274 and 424 steps), so the GIF shows typical behavior, not a lucky exception.
 - **What is drawn:** Gymnasium renders the *true* cart–pole state, not the delayed state the agent perceives. The red arrow at the pole tip shows the **direction** of the tip force. Its length is a fixed display size and does not show how strong the force is.
