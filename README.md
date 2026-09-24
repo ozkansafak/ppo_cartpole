@@ -9,13 +9,14 @@ At each time step, the agent chooses one of two actions:
 On top of standard CartPole, this project adds two complications, each implemented as a Gymnasium wrapper in the notebook:
 
 1. **External forcing** (`ExternalForcing`). Wind blows on the pole: a steady mean wind plus random turbulent gusts, which produce an aerodynamic drag load along the pole. The agent never observes the wind directly; it only sees its effect on the cart and pole. See [External forcing: wind](#external-forcing-wind).
+
 2. **Perception latency** (`PerceptionLatency`). The agent's perception lags the true state by 0.04 s (2 time steps). To compensate, each observation contains the two most recent delayed states plus the two actions the agent has taken since, from which it can infer the current state. See [Perception latency](#perception-latency).
 
 ## Why neural networks instead of a lookup table?
 
-Tabular RL stores $Q(s,a)$ or $V(s)$ in a lookup table and updates them with Bellman equations. That requires a finite, reasonably small set of states.
+Tabular RL stores $Q(s,a)$ or $V(s)$ in a lookup table and updates them with Bellman equations. This method can be employed when the set of states are finite and small.
 
-In this project, **time** is discrete (steps of $\Delta t = 0.02$ s) and the **actions** are discrete (two choices), but the **state** $[x, \dot{x}, \theta, \dot{\theta}]$ is continuous: each variable is a real number and is never binned. A lookup table would need the state discretized first, and the table grows exponentially with the number of variables. With the perception latency, each observation has 10 numbers, so even a coarse 20 bins per variable would give $20^{10} \approx 10^{13}$ cells.
+In this project, time is discretized ($\Delta t = 0.02$ s) and the actions are discrete (two choices), but the state $[x, \dot{x}, \theta, \dot{\theta}]$ is continuous: each variable is a real number and is never binned. A lookup table would need the state discretized first, and the table grows exponentially with the number of variables. With the perception latency, each observation has 10 numbers, so even a coarse 20 bins per variable would give $20^{10} \approx 10^{13}$ cells.
 
 So PPO uses neural networks, which take the real-valued state directly and generalize between nearby states, and learns from sampled trajectories instead of sweeping over all states. GAE still uses Bellman-style temporal-difference errors.
 
@@ -164,8 +165,11 @@ the two newest perceived frames (4 numbers each), plus the two actions taken sin
 ## Initial conditions
 
 - **Cart and pole:** each of $x, \dot{x}, \theta, \dot{\theta}$ is drawn uniformly from $[-0.05, 0.05]$ (m, m/s, rad, rad/s), so the pole starts within about ±2.9° of upright and nearly at rest.
+
 - **Wind:** every episode starts at $t = 0$ with new random gust phases, so each episode has a different gust history with the same statistics.
+
 - **Perception buffer:** at reset there is no history yet, so all perceived frames are filled with the initial state and the recent actions with 0.
+
 - **Random seeds:** PyTorch and NumPy are seeded with 42 at the top of the notebook. Training episodes are not individually seeded, so training results vary slightly from run to run. The GIF and the evaluation episodes use fixed seeds 0–19 and are reproducible for a given trained policy.
 
 ## PPO agent
@@ -185,21 +189,22 @@ This is the key idea behind modern reinforcement learning: use function approxim
 The GIF shows one episode of inference with the trained policy. 
 
 - **Deterministic policy:** at each step the agent takes its most likely action instead of sampling one as in training: $a = \arg\max_a \pi(a \mid s)$.
+
 - **Same conditions as training:** the same wind model and the same 0.04 s perception latency.
-- **Which episode:** the notebook first runs 20 evaluation episodes with fixed seeds 0–19 and prints the length of each. The GIF replays the longest one. In the current run, all 20 episodes lasted the full 500 steps, so the GIF shows typical behavior, not a lucky exception.
-- **What is drawn:** Gymnasium renders the *true* cart–pole state, not the delayed state the agent perceives. The red arrows show the wind as a **uniform load along the pole**: they point downwind, and their length is proportional to the drag force (350 px per newton, so the mean 0.09 N gives about 30 px). The text at the top left gives the current wind speed and drag.
+
+- **Which episode:** the notebook first runs 20 evaluation episodes with fixed seeds 0–19 and prints the length of each. The GIF replays the longest one. In the current run, 18 of the 20 episodes lasted the full 500 steps (the other two failed at 336 and 357 steps), so the GIF shows typical behavior, not a lucky exception. Training episodes are not seeded, so these numbers vary somewhat from run to run: recent runs gave 18 to 20 of 20.
+
+- **What is drawn:** Gymnasium renders the *true* cart–pole state, not the delayed state the agent perceives. The blue arrows show the wind as a **uniform load along the pole**, drawn like a load diagram: the arrowheads touch the upwind face of the pole, and a continuous blue line joins the tails (the load envelope). The arrows point downwind, and their length is proportional to the drag force (350 px per newton, so the mean 0.09 N gives about 30 px). The text at the top left gives the current wind speed and drag.
+
 - **Length:** the episode runs until it fails (see [Episodes, termination and reward](#episodes-termination-and-reward)) or reaches the 500-step (10 s) limit.
+
 - **Speed:** frames play at about 33 per second, while the simulation advances 50 steps per second ($\Delta t = 0.02$ s), so the GIF plays at about 2/3 of real time.
 
 ## Project contents
 
 - `ppo_cartpole.ipynb` — full PPO implementation, training loop, diagnostics, and animation export
 - `pyproject.toml` — project dependencies
-- `resources/` — generated diagnostic figures and animation artifacts
-
-## Run the notebook
-
-Open the notebook in Jupyter and run the cells in order.
+- `resources/` — generated diagnostic figures and animation artifacts.
 
 ## Environment
 
