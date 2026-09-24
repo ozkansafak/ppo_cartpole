@@ -8,7 +8,7 @@ At each time step, the agent chooses one of two actions:
 
 On top of standard CartPole, this project adds two complications, each implemented as a Gymnasium wrapper in the notebook:
 
-1. **External forcing** (`ExternalForcing`). A horizontal force acts on the top of the pole: a harmonic force plus random impulses. The agent never observes the forcing directly, but only responds to the changes in the velocities of the cart and the pole. See [External forcing](#external-forcing).
+1. **External forcing** (`ExternalForcing`). Wind blows on the pole: a steady mean wind plus random turbulent gusts, which produce an aerodynamic drag load along the pole. The agent never observes the wind directly; it only sees its effect on the cart and pole. See [External forcing: wind](#external-forcing-wind).
 2. **Perception latency** (`PerceptionLatency`). The agent's perception lags the true state by 0.04 s (2 time steps). To compensate, each observation contains the two most recent delayed states plus the two actions the agent has taken since, from which it can infer the current state. See [Perception latency](#perception-latency).
 
 ## Why neural networks instead of a lookup table?
@@ -81,41 +81,67 @@ These rules are part of the environment, so they apply every time the policy run
 - **Failure:** the future reward is zero, since the pole has fallen. Actions that led toward failure get lower advantages, and the policy learns to avoid them.
 - **Time limit:** the episode was cut off, not failed. The pole could have stayed up, so the critic's estimate of future reward $V(s)$ is used in place of the missing future (bootstrapping). Treating the 500-step cut-off as a failure would wrongly teach the agent that surviving to the end is bad.
 
-## External forcing
+## External forcing: wind
 
-A horizontal force $F_{tip}(t)$ acts at the pole tip, at $x + 2l\sin\theta$. It has a deterministic part and a random part:
+Wind blows horizontally on the pole, modeled the way wind loads are modeled in engineering: a mean wind plus turbulent gusts, converted to a force by aerodynamic drag.
+
+**Wind speed.** The wind speed is a steady mean plus a random fluctuation:
 
 $$
-F_{tip}(t) = A \sin(\omega t) + F_{imp}(t)
+u(t) = U + u'(t)
 $$
 
-- **Harmonic forcing** $A\sin(\omega t)$: a smooth, periodic back-and-forth push. It is deterministic, and its phase restarts at $t = 0$ at the start of every episode.
-- **Random impulses** $F_{imp}(t)$: in each time step, with probability $r\,\Delta t$, a force drawn uniformly from $[-F_{max}, F_{max}]$ acts for that one step (0.02 s). Otherwise $F_{imp} = 0$. On average that gives $r$ impulses per second, at random times, with random sign and size.
+The gust $u'(t)$ follows the **von Kármán turbulence spectrum**, the standard model for atmospheric turbulence:
+
+$$
+S_u(f) = \sigma_u^2\,\frac{4\,T_L}{\big(1 + 70.8\,(f\,T_L)^2\big)^{5/6}}, \qquad T_L = \frac{L}{U}
+$$
+
+where $\sigma_u$ is the gust intensity and $T_L$ the integral time scale (roughly, how long a gust lasts). At high frequency the spectrum falls off as $f^{-5/3}$, Kolmogorov's inertial-range law. $u'(t)$ is synthesized as a sum of 400 Fourier modes between 0.02 and 20 Hz, with amplitudes $\sqrt{2\,S_u(f)\,\Delta f}$ and random phases. The phases are drawn fresh at the start of every episode, so every episode has different gusts with the same statistics.
+
+**Drag force.** The wind exerts quadratic drag on the pole, treated as a circular cylinder:
+
+$$
+F(t) = \tfrac{1}{2}\,\rho\,C_d\,A\,|u(t)|\,u(t)
+$$
+
+with frontal area $A$ = pole diameter × pole length. The load is spread uniformly along the pole, so its resultant acts at **mid-pole**, a height $l$ above the pivot (at $x + l\sin\theta$).
 
 | Parameter | Symbol | Value |
 |---|---|---|
-| Harmonic amplitude | $A$ | 0.2 N |
-| Angular frequency | $\omega$ | 17.5 rad/s (2.79 Hz, period 0.36 s) |
-| Mean impulse rate | $r$ | 2 per second (probability 0.04 per step) |
-| Max impulse force | $F_{max}$ | 1.0 N (held for one step) |
+| Mean wind speed | $U$ | 2.5 m/s (a light breeze) |
+| Turbulence intensity | $\sigma_u / U$ | 30% ($\sigma_u$ = 0.75 m/s) |
+| Turbulence length scale | $L$ | 5 m ($T_L$ = 2 s) |
+| Air density | $\rho$ | 1.2 kg/m³ |
+| Drag coefficient (cylinder) | $C_d$ | 1.2 |
+| Pole diameter | $D$ | 2 cm (frontal area 0.02 m²) |
+| Resulting drag | $F$ | about 0.09 N mean, 0.01–0.22 N over an episode |
 
-The same forcing is used in training and in the GIF.
+The same wind model is used in training and in the GIF.
 
-![External tip force over one 10 s episode: a 0.2 N harmonic push with random impulses of up to ±1 N on top](resources/external_forcing.png)
+![Wind speed and drag force over one 10 s episode](resources/external_forcing.png)
 
-The figure shows one 10 s episode of the tip force. The blue curve is the harmonic part; the orange line is the total force actually applied, with a dot at each random impulse (20 in this episode, matching the expected $r \times 10\,\text{s} = 20$). The zoomed lower panel shows that the force is piecewise constant: each value is held for one 0.02 s step. The impulses are seeded, so the figure is reproducible; in training they are drawn fresh every episode.
+The figure shows one 10 s episode (seeded for reproducibility). Top: the wind speed, with slow gusts lasting a few seconds and small fast fluctuations on top, as in real wind. Bottom: the resulting drag. Because drag goes as $u^2$, gusts are amplified: the wind varies by about ±30%, but the force varies by more than a factor of ten.
 
-Over one time step $\Delta t$, $F_{tip}$ is applied as an impulse $J = F_{tip}\,\Delta t$ with generalized components $(J,\; 2 l \cos\theta\,J)$, which changes $\dot{x}$ and $\dot{\theta}$ through the mass matrix of the equations above. The impulse is applied just before Gymnasium's Euler step.
+**Applying the force.** Over one time step $\Delta t$, $F$ is applied as an impulse $J = F\,\Delta t$ with generalized components $(J,\; l \cos\theta\,J)$, which changes $\dot{x}$ and $\dot{\theta}$ through the mass matrix of the equations above. The impulse is applied just before Gymnasium's Euler step.
 
-For scale, the change in $\dot{\theta}$ from one step of force:
+**Why the wind is limited to a light breeze.** Real wind has a nonzero mean, so to stay balanced the pole must lean *into* the wind. With the drag and the pole's weight both acting at mid-pole, the steady equilibrium lean is
+
+$$
+\sin\theta_{eq} = \frac{F}{m\,g}
+$$
+
+The pole weighs only 0.1 kg ($m g$ = 0.98 N), so it is very sensitive to wind. At 2.5 m/s the mean drag of 0.09 N gives a lean of about 5°. At 4 m/s the lean would be about 14°, beyond the 12° failure limit: no controller could keep the pole up. The largest tolerable mean drag is $m g \sin 12° \approx 0.20$ N.
+
+**What the agent has to do.** The per-step kick from the wind is small compared with the agent's own push:
 
 | Force | $\Delta\dot{\theta}$ per step |
 |---|---|
 | Agent's 10 N push on the cart | 0.29 rad/s |
-| 0.2 N at the tip (harmonic peak) | 0.12 rad/s |
-| 1.0 N at the tip (largest impulse) | 0.62 rad/s |
+| Mean drag, 0.09 N at mid-pole | 0.03 rad/s |
+| Peak gust drag, 0.22 N at mid-pole | 0.06 rad/s |
 
-A force at the tip is very effective: the pole is light (0.1 kg) and the tip has the longest lever arm, so the largest impulse moves the pole about twice as much as the agent's own push.
+The difficulty is that the wind pushes **persistently in one direction**. The whole system is blown downwind, so the agent has to hold the pole tilted into the wind and push back on average to keep the cart from drifting off the track, all while the gusts change the required lean every few seconds. Without that correction, even a good balancing controller is blown off the end of the track within a few seconds.
 
 ## Perception latency
 
@@ -138,7 +164,7 @@ the two newest perceived frames (4 numbers each), plus the two actions taken sin
 ## Initial conditions
 
 - **Cart and pole:** each of $x, \dot{x}, \theta, \dot{\theta}$ is drawn uniformly from $[-0.05, 0.05]$ (m, m/s, rad, rad/s), so the pole starts within about ±2.9° of upright and nearly at rest.
-- **Forcing:** the harmonic term starts at phase 0 ($t = 0$) every episode; the random impulses start fresh.
+- **Wind:** every episode starts at $t = 0$ with new random gust phases, so each episode has a different gust history with the same statistics.
 - **Perception buffer:** at reset there is no history yet, so all perceived frames are filled with the initial state and the recent actions with 0.
 - **Random seeds:** PyTorch and NumPy are seeded with 42 at the top of the notebook. Training episodes are not individually seeded, so training results vary slightly from run to run. The GIF and the evaluation episodes use fixed seeds 0–19 and are reproducible for a given trained policy.
 
@@ -154,14 +180,14 @@ This is the key idea behind modern reinforcement learning: use function approxim
 
 ## Trained agent animation
 
-![Trained agent balancing the pole under external tip forcing](resources/cartpole_trained_rollout.gif)
+![Trained agent balancing the pole in turbulent wind](resources/cartpole_trained_rollout.gif)
 
 The GIF shows one episode of inference with the trained policy. 
 
 - **Deterministic policy:** at each step the agent takes its most likely action instead of sampling one as in training: $a = \arg\max_a \pi(a \mid s)$.
-- **Same conditions as training:** the same external forcing and the same 0.04 s perception latency.
-- **Which episode:** the notebook first runs 20 evaluation episodes with fixed seeds 0–19 and prints the length of each. The GIF replays the longest one. In the current run, 18 of the 20 episodes lasted the full 500 steps (the other two failed at 274 and 424 steps), so the GIF shows typical behavior, not a lucky exception.
-- **What is drawn:** Gymnasium renders the *true* cart–pole state, not the delayed state the agent perceives. The red arrow at the pole tip shows the **direction** of the tip force. Its length is a fixed display size and does not show how strong the force is.
+- **Same conditions as training:** the same wind model and the same 0.04 s perception latency.
+- **Which episode:** the notebook first runs 20 evaluation episodes with fixed seeds 0–19 and prints the length of each. The GIF replays the longest one. In the current run, all 20 episodes lasted the full 500 steps, so the GIF shows typical behavior, not a lucky exception.
+- **What is drawn:** Gymnasium renders the *true* cart–pole state, not the delayed state the agent perceives. The red arrows show the wind as a **uniform load along the pole**: they point downwind, and their length is proportional to the drag force (350 px per newton, so the mean 0.09 N gives about 30 px). The text at the top left gives the current wind speed and drag.
 - **Length:** the episode runs until it fails (see [Episodes, termination and reward](#episodes-termination-and-reward)) or reaches the 500-step (10 s) limit.
 - **Speed:** frames play at about 33 per second, while the simulation advances 50 steps per second ($\Delta t = 0.02$ s), so the GIF plays at about 2/3 of real time.
 
