@@ -1,4 +1,4 @@
-# PPO Cartpole
+# PPO Cartpole with Wind Forcing and Perception Latency
 
 This project trains a PPO (Proximal Policy Optimization) agent to solve the classic CartPole problem in Gymnasium. Gymnasium simulates the dynamics of the cart.
 
@@ -8,33 +8,59 @@ At each time step, the agent chooses one of two actions:
 
 On top of standard CartPole, this project adds two complications, each implemented as a Gymnasium wrapper in the notebook:
 
-1. **External forcing** (`ExternalForcing`). Wind blows on the pole: a steady mean wind plus random turbulent gusts, which produce an aerodynamic drag load along the pole. The agent never observes the wind directly; it only sees its effect on the cart and pole. See [External forcing: wind](#external-forcing-wind).
+1. **External forcing**. Wind blows on the pole and the cart: a steady mean wind plus random turbulent gusts, which produce aerodynamic drag on both. The agent never observes the wind directly; it only sees its effect on the cart and pole. See [External forcing: wind](#external-forcing-wind).
 
-2. **Perception latency** (`PerceptionLatency`). The agent's perception lags the true state by 0.04 s (2 time steps). To compensate, each observation contains the two most recent delayed states plus the two actions the agent has taken since, from which it can infer the current state. See [Perception latency](#perception-latency).
+2. **Perception latency**. The agent's perception lags the true state by 0.04 s (2 time steps): it sees the state $[x, \dot{x}, \theta, \dot{\theta}]$ from 2 steps ago and acts on it as if it were the current state. See [Perception latency](#perception-latency).
 
 ## Why neural networks instead of a lookup table?
 
-Tabular RL stores $Q(s,a)$ or $V(s)$ in a lookup table and updates them with Bellman equations. This method can be employed when the set of states are finite and small.
+Tabular RL stores $Q(s,a)$ or $V(s)$ in a lookup table and updates them with Bellman equations. This method can be employed when the set of states is finite and small.
 
-In this project, time is discretized ($\Delta t = 0.02$ s) and the actions are discrete (two choices), but the state $[x, \dot{x}, \theta, \dot{\theta}]$ is continuous: each variable is a real number and is never binned. A lookup table would need the state discretized first, and the table grows exponentially with the number of variables. With the perception latency, each observation has 10 numbers, so even a coarse 20 bins per variable would give $20^{10} \approx 10^{13}$ cells.
+The state $[x, \dot{x}, \theta, \dot{\theta}]$ is continuous: each variable is a real number. But time is discretized ($\Delta t = 0.02$ s) and there are only two discrete actions of the agent. A lookup table would need the state to be discretized first, and the table grows exponentially with the number of variables: with 4 variables, 20 bins each gives $20^4 = 160{,}000$ cells, and a finer 100 bins each gives $100^4 = 10^8$. Coarse bins lose the precision needed near upright, and fine bins make the table too large to fill from experience.
 
-So PPO uses neural networks, which take the real-valued state directly and generalize between nearby states, and learns from sampled trajectories instead of sweeping over all states. GAE still uses Bellman-style temporal-difference errors.
+PPO uses neural networks, which take the real-valued state directly and generalize between nearby states, and learns from sampled trajectories instead of sweeping over all states. GAE still uses Bellman style temporal-difference errors.
 
 ## Physics model
 
-Cartpole is a simple coupled mechanical system: a cart moves along the x-axis while a pole rotates about the pivot.
+Cartpole is a simple coupled mechanical system: a cart moves along the x-axis while a pole rotates about the pivot. The task of the agent is to keep the pole balanced even though a random lateral wind blows on the pole and the cart, and the agent perceives the state with a fixed latency (0.04 s, or 2 time steps).
 
-Gymnasium models the pole as a uniform rod of mass $m$ and length $2l$ (its `length` parameter is the half-length $l$) on a cart of mass $M$. The angle $\theta$ is measured from upright, positive when the pole leans right. With a horizontal force $F$ on the cart, the coupled equations of motion are:
+Gymnasium models the pole as a uniform rod of mass $m$ and length $2l$ (its `length` parameter is $l$) on a cart of mass $M$. The angle $\theta$ is measured clockwise from upright position. With a horizontal force $F$ applied by the agent on the cart, the coupled equations of motion are:
+
+Conservation of linear momentum in x-dir:
+$$
+F = (M + m)\,\ddot{x} + m l \cos\theta\,\ddot{\theta} - m l \dot{\theta}^2 \sin\theta
+$$
+
+Conservation of angular momentum around z axis:
+$$
+m g l \sin\theta = \tfrac{4}{3} m l^2\,\ddot{\theta} + m l \cos\theta\,\ddot{x}
+$$
+
+The first equation is $F = M\ddot{x} + m\,\ddot{x}_{cm}$, where $x_{cm} = x + l\sin\theta$ is the horizontal position of the pole's center of mass:
 
 $$
-(M + m)\,\ddot{x} + m l \cos\theta\,\ddot{\theta} - m l \dot{\theta}^2 \sin\theta = F
+\ddot{x}_{cm} = \ddot{x} + l\cos\theta\,\ddot{\theta} - l\sin\theta\,\dot{\theta}^2
 $$
 
-$$
-\tfrac{4}{3} m l^2\,\ddot{\theta} + m l \cos\theta\,\ddot{x} - m g l \sin\theta = 0
-$$
+- $\ddot{x}$: the pivot moves with the cart.
+- $l\cos\theta\,\ddot{\theta}$: horizontal component of the pole's tangential acceleration.
+- $-l\sin\theta\,\dot{\theta}^2$: horizontal component of its centripetal acceleration. Relative to the pivot, the center of mass moves on a circle of radius $l$, so it has acceleration $l\dot{\theta}^2$ directed along the pole toward the pivot. A fast-swinging pole pulls on the pivot along its axis, and when tilted, part of that pull acts horizontally on the cart. The term is nonlinear, of order $\theta\dot{\theta}^2$ near upright, so it vanishes when the equations are linearized; the simulation keeps it.
+
+In the second equation, the term $m l \cos\theta\,\ddot{x}$ reflects the inertial torque from the accelaration of the pivot that connects the pole to the cart, since it accelerates with the cart. 
 
 $\tfrac{4}{3} m l^2$ is the rod's moment of inertia about the pivot. The $\cos\theta$ terms couple the two: accelerating the cart tips the pole, and the swinging pole pushes back on the cart. Gravity ($+m g l \sin\theta$) makes the upright position unstable.
+
+These are Gymnasium's equations, without wind. The wind adds external forces on both bodies: the drag on the cart $F_{cart}$ and the drag on the pole $F_{pole}$ (acting at mid-pole). With them the equations become
+
+$$
+F + F_{cart} + F_{pole} = (M + m)\,\ddot{x} + m l \cos\theta\,\ddot{\theta} - m l \dot{\theta}^2 \sin\theta
+$$
+
+$$
+m g l \sin\theta + F_{pole}\, l \cos\theta = \tfrac{4}{3} m l^2\,\ddot{\theta} + m l \cos\theta\,\ddot{x}
+$$
+
+See [External forcing: wind](#external-forcing-wind) for how the wind forces are computed and applied.
 
 There is **no friction**: neither between the cart and the track nor at the pivot. (The original Barto et al. (1983) model had both; Gymnasium drops them.)
 
@@ -84,7 +110,7 @@ These rules are part of the environment, so they apply every time the policy run
 
 ## External forcing: wind
 
-Wind blows horizontally on the pole, modeled the way wind loads are modeled in engineering: a mean wind plus turbulent gusts, converted to a force by aerodynamic drag.
+Wind blows horizontally on the pole and the cart, modeled the way wind loads are modeled in engineering: a mean wind plus turbulent gusts, converted to forces by aerodynamic drag.
 
 **Wind speed.** The wind speed is a steady mean plus a random fluctuation:
 
@@ -100,13 +126,16 @@ $$
 
 where $\sigma_u$ is the gust intensity and $T_L$ the integral time scale (roughly, how long a gust lasts). At high frequency the spectrum falls off as $f^{-5/3}$, Kolmogorov's inertial-range law. $u'(t)$ is synthesized as a sum of 400 Fourier modes between 0.02 and 20 Hz, with amplitudes $\sqrt{2\,S_u(f)\,\Delta f}$ and random phases. The phases are drawn fresh at the start of every episode, so every episode has different gusts with the same statistics.
 
-**Drag force.** The wind exerts quadratic drag on the pole, treated as a circular cylinder:
+**Drag force.** The same wind acts on both bodies. Each experiences quadratic drag
 
 $$
 F(t) = \tfrac{1}{2}\,\rho\,C_d\,A\,|u(t)|\,u(t)
 $$
 
-with frontal area $A$ = pole diameter × pole length. The load is spread uniformly along the pole, so its resultant acts at **mid-pole**, a height $l$ above the pivot (at $x + l\sin\theta$).
+with its own drag coefficient $C_d$ and frontal area $A$ (the area facing the wind):
+
+- **Pole:** a circular cylinder, $A$ = pole diameter × pole length. The load is spread uniformly along the pole, so its resultant $F_{pole}$ acts at **mid-pole**, a height $l$ above the pivot (at $x + l\sin\theta$).
+- **Cart:** a cube whose side is 1/5 of the pole length (0.2 m), so $A$ = 0.2 m × 0.2 m. Its drag $F_{cart}$ acts on the cart itself.
 
 | Parameter | Symbol | Value |
 |---|---|---|
@@ -114,53 +143,61 @@ with frontal area $A$ = pole diameter × pole length. The load is spread uniform
 | Turbulence intensity | $\sigma_u / U$ | 30% ($\sigma_u$ = 0.75 m/s) |
 | Turbulence length scale | $L$ | 5 m ($T_L$ = 2 s) |
 | Air density | $\rho$ | 1.2 kg/m³ |
-| Drag coefficient (cylinder) | $C_d$ | 1.2 |
-| Pole diameter | $D$ | 2 cm (frontal area 0.02 m²) |
-| Resulting drag | $F$ | about 0.09 N mean, 0.01–0.22 N over an episode |
+| Pole: drag coefficient (cylinder) | $C_d$ | 1.2 |
+| Pole: diameter | $D$ | 2 cm (frontal area 0.02 m²) |
+| Cart: drag coefficient (cube, face-on) | $C_d$ | 1.05 |
+| Cart: side length | | 0.2 m (frontal area 0.04 m²) |
+| Resulting drag on the pole | $F_{pole}$ | about 0.09 N mean, 0.01–0.22 N over an episode |
+| Resulting drag on the cart | $F_{cart}$ | about 0.16 N mean, up to 0.39 N over an episode |
 
-The same wind model is used in training and in the GIF.
+The cart has twice the pole's frontal area, so it catches more wind than the pole. The same wind model is used in training and in the GIF.
 
-![Wind speed and drag force over one 10 s episode](resources/external_forcing.png)
+![Wind speed and drag forces on the pole and cart over one 10 s episode](resources/external_forcing.png)
 
-The figure shows one 10 s episode (seeded for reproducibility). Top: the wind speed, with slow gusts lasting a few seconds and small fast fluctuations on top, as in real wind. Bottom: the resulting drag. Because drag goes as $u^2$, gusts are amplified: the wind varies by about ±30%, but the force varies by more than a factor of ten.
+The figure shows one 10 s episode (seeded for reproducibility). Top: the wind speed, with slow gusts lasting a few seconds and small fast fluctuations on top, as in real wind. Bottom: the resulting drag on the cart and on the pole. Both follow the same gusts; the cart's is larger because of its larger area. Because drag goes as $u^2$, gusts are amplified: the wind varies by about ±30%, but the forces vary by more than a factor of ten.
 
-**Applying the force.** Over one time step $\Delta t$, $F$ is applied as an impulse $J = F\,\Delta t$ with generalized components $(J,\; l \cos\theta\,J)$, which changes $\dot{x}$ and $\dot{\theta}$ through the mass matrix of the equations above. The impulse is applied just before Gymnasium's Euler step.
+**Applying the forces.** Over one time step $\Delta t$, each drag force is applied as an impulse $J = F\,\Delta t$, which changes $\dot{x}$ and $\dot{\theta}$ through the mass matrix of the equations above. The generalized impulse depends on where the force acts:
 
-**Why the wind is limited to a light breeze.** Real wind has a nonzero mean, so to stay balanced the pole must lean *into* the wind. With the drag and the pole's weight both acting at mid-pole, the steady equilibrium lean is
+- **Pole** (at height $l$): $(J_{pole},\; l\cos\theta\,J_{pole})$. It pushes the system and tips the pole directly.
+- **Cart** (at the cart): $(J_{cart},\; 0)$. It exerts no torque on the pole directly, but accelerating the cart tips the pole through the $\cos\theta$ coupling, just like the agent's own push.
+
+Both impulses are applied just before Gymnasium's Euler step.
+
+**Why the wind is limited to a light breeze.** Real wind has a nonzero mean, so to stay balanced the pole must lean *into* the wind. With the pole's drag and weight both acting at mid-pole, and the cart held stationary on average, the steady equilibrium lean is
 
 $$
 \sin\theta_{eq} = \frac{F}{m\,g}
 $$
 
-The pole weighs only 0.1 kg ($m g$ = 0.98 N), so it is very sensitive to wind. At 2.5 m/s the mean drag of 0.09 N gives a lean of about 5°. At 4 m/s the lean would be about 14°, beyond the 12° failure limit: no controller could keep the pole up. The largest tolerable mean drag is $m g \sin 12° \approx 0.20$ N.
+where $F$ is the drag on the pole; the cart's drag does not change the lean. The pole weighs only 0.1 kg ($m g$ = 0.98 N), so it is very sensitive to wind. At 2.5 m/s the mean drag of 0.09 N gives a lean of about 5°. At 4 m/s the lean would be about 14°, beyond the 12° failure limit: no controller could keep the pole up. The largest tolerable mean drag is $m g \sin 12° \approx 0.20$ N.
 
 **What the agent has to do.** The per-step kick from the wind is small compared with the agent's own push:
 
 | Force | $\Delta\dot{\theta}$ per step |
 |---|---|
 | Agent's 10 N push on the cart | 0.29 rad/s |
-| Mean drag, 0.09 N at mid-pole | 0.03 rad/s |
-| Peak gust drag, 0.22 N at mid-pole | 0.06 rad/s |
+| Mean pole drag, 0.09 N at mid-pole | 0.03 rad/s |
+| Peak pole drag, 0.22 N at mid-pole | 0.06 rad/s |
+| Mean cart drag, 0.16 N on the cart | 0.005 rad/s (tips the pole the other way) |
 
-The difficulty is that the wind pushes **persistently in one direction**. The whole system is blown downwind, so the agent has to hold the pole tilted into the wind and push back on average to keep the cart from drifting off the track, all while the gusts change the required lean every few seconds. Without that correction, even a good balancing controller is blown off the end of the track within a few seconds.
+The difficulty is that the wind pushes **persistently in one direction**. Together the pole and cart catch about 0.25 N of mean drag, so the whole system is blown downwind. The agent has to hold the pole tilted into the wind and push back on average to keep the cart from drifting off the track, all while the gusts change the required lean every few seconds. Without that correction, even a good balancing controller is blown off the end of the track within a few seconds. The cart's drag adds mostly to this drift, which makes keeping the cart on the track harder.
 
 ## Perception latency
 
-The agent perceives the state $\tau = 0.04$ s (2 time steps) late: at step $n$ it sees $s_{n-2}$, not $s_n$. The simulation itself always uses the true state.
-
-To compensate, each observation contains 10 numbers:
+The agent perceives the state $\tau = 0.04$ s (2 time steps) late. At step $n$ its only input is the state from 2 steps earlier,
 
 $$
-\big[\; s_{n-3} \;\big|\; s_{n-2} \;\big|\; a_{n-1},\ a_n \;\big]
+o_n = s_{n-2} = [x, \dot{x}, \theta, \dot{\theta}]_{n-2}
 $$
 
-the two newest perceived frames (4 numbers each), plus the two actions taken since the newest one (+1 right, −1 left). From these, the network can predict the current state forward, which is what latency compensation does in an autonomous-vehicle stack.
+and it acts on it as if it were the current state. This models the time it takes to sense the cart and pole and process what it sees before acting. 
 
 | Parameter | Value |
 |---|---|
-| Perception latency $\tau$ | 0.04 s (2 steps) |
-| Perceived frames per observation | 2 |
-| Observation size | 10 |
+| Perception latency, $\tau$ | 0.04 s (2 steps) |
+| Observation | $[x, \dot{x}, \theta, \dot{\theta}]$ at $t - \tau$ (4 numbers) |
+
+**What the delay costs.** Acting on a 40 ms-old state is not optimal: during those 2 steps the agent's own pushes and the wind have already moved the cart and pole. For comparison, an earlier version also gave the agent its two most recent actions and one extra delayed frame, from which it could extrapolate to the present (what the brain does with an efference copy of its motor commands, or an autonomous vehicle with latency compensation). With the same wind, that version kept the pole up for the full 500 steps in 18 of 20 evaluation episodes, against 11 of 20 with the pure delay used here.
 
 ## Initial conditions
 
@@ -168,9 +205,9 @@ the two newest perceived frames (4 numbers each), plus the two actions taken sin
 
 - **Wind:** every episode starts at $t = 0$ with new random gust phases, so each episode has a different gust history with the same statistics.
 
-- **Perception buffer:** at reset there is no history yet, so all perceived frames are filled with the initial state and the recent actions with 0.
+- **Perception buffer:** at reset there is no history yet, so for the first 2 steps the agent perceives the initial state.
 
-- **Random seeds:** PyTorch and NumPy are seeded with 42 at the top of the notebook. Training episodes are not individually seeded, so training results vary slightly from run to run. The GIF and the evaluation episodes use fixed seeds 0–19 and are reproducible for a given trained policy.
+- **Random seeds:** PyTorch and NumPy are seeded with 42 at the top of the notebook, and the training environment with 42 at its first reset, so the whole notebook is reproducible: re-running it gives the same trained policy, figures and GIF. The evaluation episodes and the GIF use fixed seeds 0–19.
 
 ## PPO agent
 
@@ -186,15 +223,15 @@ This is the key idea behind modern reinforcement learning: use function approxim
 
 ![Trained agent balancing the pole in turbulent wind](resources/cartpole_trained_rollout.gif)
 
-The GIF shows one episode of inference with the trained policy. 
+The GIF shows one episode of inference. 
 
 - **Deterministic policy:** at each step the agent takes its most likely action instead of sampling one as in training: $a = \arg\max_a \pi(a \mid s)$.
 
 - **Same conditions as training:** the same wind model and the same 0.04 s perception latency.
 
-- **Which episode:** the notebook first runs 20 evaluation episodes with fixed seeds 0–19 and prints the length of each. The GIF replays the longest one. In the current run, 18 of the 20 episodes lasted the full 500 steps (the other two failed at 336 and 357 steps), so the GIF shows typical behavior, not a lucky exception. Training episodes are not seeded, so these numbers vary somewhat from run to run: recent runs gave 18 to 20 of 20.
+- **Which episode:** the notebook first runs 20 evaluation episodes with fixed seeds 0–19 and prints the length of each. The GIF replays the longest one. With the current seeds, 11 of the 20 episodes last the full 500 steps; the other nine fail between 113 and 488 steps (median over all 20: 500). So the GIF shows a successful episode, which is slightly more common than not, but far from guaranteed.
 
-- **What is drawn:** Gymnasium renders the *true* cart–pole state, not the delayed state the agent perceives. The blue arrows show the wind as a **uniform load along the pole**, drawn like a load diagram: the arrowheads touch the upwind face of the pole, and a continuous blue line joins the tails (the load envelope). The arrows point downwind, and their length is proportional to the drag force (350 px per newton, so the mean 0.09 N gives about 30 px). The text at the top left gives the current wind speed and drag.
+- **What is drawn:** Gymnasium renders the *true* cart–pole state, not the delayed state the agent perceives. The blue arrows show the wind as a **uniform load along the pole**, drawn like a load diagram: the arrowheads touch the upwind face of the pole, and a continuous blue line joins the tails (the load envelope). The arrows point downwind, and their length is proportional to the drag force (350 px per newton, so the mean 0.09 N gives about 30 px). The blue arrows along the full height of the cart's upwind face show the wind on the cart, at the same scale. The red arrow just below the cart is the agent's push: it points in the direction of the push, toward the side of the cart being pushed. The push is always 10 N, so this arrow has a fixed length and only its direction changes. A legend at the top left identifies the red and blue arrows.
 
 - **Length:** the episode runs until it fails (see [Episodes, termination and reward](#episodes-termination-and-reward)) or reaches the 500-step (10 s) limit.
 
@@ -214,3 +251,4 @@ The GIF shows one episode of inference with the trained policy.
 - NumPy
 - Matplotlib
 - Pillow
+- pygame (used by Gymnasium to render the animation)
