@@ -60,6 +60,17 @@ $$
 m g l \sin\theta + F_{pole}\, l \cos\theta = \tfrac{4}{3} m l^2\,\ddot{\theta} + m l \cos\theta\,\ddot{x}
 $$
 
+In matrix form, with the mass matrix $\mathbf{M}(\theta)$:
+
+$$
+\underbrace{\begin{bmatrix} M+m & m l\cos\theta \\ m l\cos\theta & \tfrac{4}{3} m l^2 \end{bmatrix}}_{\mathbf{M}(\theta)}
+\begin{bmatrix} \ddot{x} \\ \ddot{\theta} \end{bmatrix}
+=
+\begin{bmatrix} F + F_{cart} + F_{pole} + m l\dot{\theta}^2\sin\theta \\ m g l\sin\theta + F_{pole}\, l\cos\theta \end{bmatrix}
+$$
+
+The diagonal entries are the inertia of each coordinate (total mass, and the pole's moment of inertia about the pivot); the off-diagonal $m l\cos\theta$ couples cart and pole. $\mathbf{M}(\theta)$ is symmetric and positive definite, so the accelerations can always be solved for.
+
 See [External forcing: wind](#external-forcing-wind) for how the wind forces are computed and applied.
 
 There is **no friction**: neither between the cart and the track nor at the pivot. (The original Barto et al. (1983) model had both; Gymnasium drops them.)
@@ -95,24 +106,27 @@ The step size resolves the dynamics comfortably. Linearized about upright, the p
 
 ## Episodes, termination and reward
 
-An **episode** is one attempt to balance the pole, from a reset until it fails or runs out of time. The start state is random, with each of $x, \dot{x}, \theta, \dot{\theta}$ drawn uniformly from $[-0.05, 0.05]$.
+An episode is one attempt to balance the pole, starting near upright and ending when it fails or after 500 steps (10 s). Each of the state variables $x, \dot{x}, \theta, \dot{\theta}$ starts uniformly random in $[-0.05, 0.05]$.
 
 - **Failure (termination):** the episode ends as soon as the pole tilts more than 12° from upright ($|\theta| > 0.2094$ rad) or the cart leaves the track ($|x| > 2.4$ m).
-- **Time limit (truncation):** otherwise the episode is cut off after 500 steps, i.e. 10 s of simulated time.
+- **Time limit (truncation):** otherwise the episode is cut off after 500 steps, that is 10 secs.
 - **Reward:** +1 for every step the pole stays up, so an episode's total reward is the number of steps it survived. The maximum is 500.
 
 These rules are part of the environment, so they apply every time the policy runs: during training (a failed episode triggers a reset and a new attempt) and when rendering the GIF (the recording stops at the end of the episode).
 
-**Why failure drives learning.** The reward is the same +1 on every step, so the only thing that distinguishes good behavior from bad is *when the episode ends*. Failing early means fewer +1 rewards; the 12° and 2.4 m limits are what turn "balance the pole" into a learnable objective. In training, the two kinds of episode end are treated differently:
+**Why failure drives learning.** The reward is the same +1 on every step, so the only thing that distinguishes good behavior from bad is *when the episode ends prematurely*. Failing early means fewer discounted future rewards.  The 12° and 2.4 m limits are what turn balancing the pole into a learnable objective. 
 
-- **Failure:** the future reward is zero, since the pole has fallen. Actions that led toward failure get lower advantages, and the policy learns to avoid them.
+In training, the two kinds of episode endings have different effects on learning a policy:
+
+- **Failure:** Angle exceeds 12 degrees or the cart moves outside the 2.4 m section, the future reward is zero. Actions that led toward failure get lower advantages, and the policy learns to avoid them.
+
 - **Time limit:** the episode was cut off, not failed. The pole could have stayed up, so the critic's estimate of future reward $V(s)$ is used in place of the missing future (bootstrapping). Treating the 500-step cut-off as a failure would wrongly teach the agent that surviving to the end is bad.
 
 ## External forcing: wind
 
 Wind blows horizontally on the pole and the cart, modeled the way wind loads are modeled in engineering: a mean wind plus turbulent gusts, converted to forces by aerodynamic drag.
 
-**Wind speed.** The wind speed is a steady mean plus a random fluctuation:
+The wind speed is a steady mean plus a random fluctuation:
 
 $$
 u(t) = U + u'(t)
@@ -154,9 +168,9 @@ The cart has twice the pole's frontal area, so it catches more wind than the pol
 
 ![Wind speed and drag forces on the pole and cart over one 10 s episode](resources/external_forcing.png)
 
-The figure shows one 10 s episode (seeded for reproducibility). Top: the wind speed, with slow gusts lasting a few seconds and small fast fluctuations on top, as in real wind. Bottom: the resulting drag on the cart and on the pole. Both follow the same gusts; the cart's is larger because of its larger area. Because drag goes as $u^2$, gusts are amplified: the wind varies by about ±30%, but the forces vary by more than a factor of ten.
+The figure shows one 10 s episode (seeded for reproducibility). Top: the wind speed, with slow gusts lasting a few seconds and small fast fluctuations on top, as in real wind. Bottom: the resulting drag force on the cart and on the pole. The force on the cart is larger because of its larger crossectional area. Since the wind force is proportional to $u^2$, gusts are amplified. The wind varies by about ±30%, but the forces vary by more than a factor of ten.
 
-**Applying the forces.** Over one time step $\Delta t$, each drag force is applied as an impulse $J = F\,\Delta t$, which changes $\dot{x}$ and $\dot{\theta}$ through the mass matrix of the equations above. The generalized impulse depends on where the force acts:
+**Applying the forces.** Over one time step $\Delta t$, the wind force is applied as an impulse $J = F\,\Delta t$, which changes $\dot{x}$ and $\dot{\theta}$ through the mass matrix of the equations of motion: $\big[\Delta\dot{x},\ \Delta\dot{\theta}\big]^T = \mathbf{M}(\theta)^{-1}\,\big[J_x,\ J_\theta\big]^T$. The generalized impulse depends on where the force acts:
 
 - **Pole** (at height $l$): $(J_{pole},\; l\cos\theta\,J_{pole})$. It pushes the system and tips the pole directly.
 - **Cart** (at the cart): $(J_{cart},\; 0)$. It exerts no torque on the pole directly, but accelerating the cart tips the pole through the $\cos\theta$ coupling, just like the agent's own push.
@@ -197,7 +211,11 @@ and it acts on it as if it were the current state. This models the time it takes
 | Perception latency, $\tau$ | 0.04 s (2 steps) |
 | Observation | $[x, \dot{x}, \theta, \dot{\theta}]$ at $t - \tau$ (4 numbers) |
 
-**What the delay costs.** Acting on a 40 ms-old state is not optimal: during those 2 steps the agent's own pushes and the wind have already moved the cart and pole. For comparison, an earlier version also gave the agent its two most recent actions and one extra delayed frame, from which it could extrapolate to the present (what the brain does with an efference copy of its motor commands, or an autonomous vehicle with latency compensation). With the same wind, that version kept the pole up for the full 500 steps in 18 of 20 evaluation episodes, against 11 of 20 with the pure delay used here.
+**What the delay costs.** Acting on a 40 ms-old state is not optimal: during those 2 steps the agent's own pushes and the wind have already moved the cart and pole.
+
+**Efference copy.** The brain faces the same problem: sensory feedback arrives 100–200 ms late. It compensates with an *efference copy*, an internal copy of each motor command sent to the brain regions that predict movement. Combining the delayed sensory signal with the commands issued since, it estimates the body's current state before the feedback arrives (a forward model). Autonomous vehicles do the same, under the name latency compensation.
+
+The PPO agent here has no efference copy: it acts on the delayed state alone. An earlier version gave it one, in the form of its two most recent actions (plus one extra delayed frame), so it could extrapolate to the present. With the same wind, that version kept the pole up for the full 500 steps in 18 of 20 evaluation episodes, against 11 of 20 with the pure delay.
 
 ## Initial conditions
 
