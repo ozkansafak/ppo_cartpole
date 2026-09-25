@@ -237,6 +237,8 @@ In this project:
 
 This is the key idea behind modern reinforcement learning: use function approximation to generalize across a huge or continuous state space.
 
+Derivations of the policy gradient, the clipped objective and GAE: [PPO notes](PPO_NOTES.md).
+
 ## Trained agent animation
 
 ![Trained agent balancing the pole in turbulent wind](resources/cartpole_trained_rollout.gif)
