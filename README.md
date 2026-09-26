@@ -24,7 +24,7 @@ An episode is one attempt to balance the pole for 500 steps or until it fails.
 
 - **Reward:** +1 for every step the pole stays up.
 
-The reward is +1 on every time step. Failing early results less fewer discounted future rewards.  Failing to keep within the limits of 12° and 2.4 m turns balancing pole into a learnable objective. 
+The reward is +1 on every time step. Failing early results in fewer future rewards and it turns balancing pole into a learnable objective. 
 
 When balancing fails, the future rewards are zero. Actions that led toward failure get lower advantages, and the policy learns to avoid them.
 
@@ -108,7 +108,7 @@ $$
 - $l\cos\theta\,\ddot{\theta}$: horizontal component of the pole's tangential acceleration.
 - $-l\sin\theta\,\dot{\theta}^2$: horizontal component of its centripetal acceleration. Relative to the pivot, the center of mass moves on a circle of radius $l$, so it has acceleration $l\dot{\theta}^2$ directed along the pole toward the pivot. A fast-swinging pole pulls on the pivot along its axis, and when tilted, part of that pull acts horizontally on the cart. The term is nonlinear, of order $\theta\dot{\theta}^2$ near upright, so it vanishes when the equations are linearized; the simulation keeps it.
 
-In the second equation, the term $m l \cos\theta\,\ddot{x}$ reflects the inertial torque from the accelaration of the pivot that connects the pole to the cart, since it accelerates with the cart. 
+In the second equation, the term $m l \cos\theta\,\ddot{x}$ reflects the inertial torque from the acceleration of the pivot that connects the pole to the cart, since it accelerates with the cart. 
 
 $\tfrac{4}{3} m l^2$ is the rod's moment of inertia about the pivot. The $\cos\theta$ terms couple the two: accelerating the cart tips the pole, and the swinging pole pushes back on the cart. Gravity ($+m g l \sin\theta$) makes the upright position unstable.
 
@@ -126,15 +126,6 @@ $$
 See [External forcing: wind](#external-forcing-wind) for how the wind forces are computed and applied.
 
 There is **no friction**: neither between the cart and the track nor at the pivot. (The original Barto et al. (1983) model had both; Gymnasium drops them.)
-
-| Parameter | Symbol | Value |
-|---|---|---|
-| Cart mass | $M$ | 1.0 kg |
-| Pole mass | $m$ | 0.1 kg |
-| Pole half-length | $l$ | 0.5 m (full pole 1.0 m) |
-| Gravity | $g$ | 9.8 m/s² |
-| Agent's force on the cart | $F$ | ±10 N |
-| Time step | $\Delta t$ | 0.02 s |
 
 ## Time integration
 
@@ -185,19 +176,6 @@ with its own drag coefficient $C_d$ and frontal cross-sectional area $A$ :
 - Pole is a circular cylinder. The load is spread uniformly along the pole.
 - Cart is a cube whose side is 1/5 of the pole length (0.2 m).
 
-| Parameter | Symbol | Value |
-|---|---|---|
-| Mean wind speed | $U$ | 2.5 m/s (a light breeze) |
-| Turbulence intensity | $\sigma_u / U$ | 30% ($\sigma_u$ = 0.75 m/s) |
-| Turbulence length scale | $L$ | 5 m ($T_L$ = 2 s) |
-| Air density | $\rho$ | 1.2 kg/m³ |
-| Pole: drag coefficient (cylinder) | $C_d$ | 1.2 |
-| Pole: diameter | $D$ | 2 cm (frontal area 0.02 m²) |
-| Cart: drag coefficient (cube, face-on) | $C_d$ | 1.05 |
-| Cart: side length | | 0.2 m (frontal area 0.04 m²) |
-| Resulting drag on the pole | $F_{pole}$ | about 0.09 N mean, 0.01–0.22 N over an episode |
-| Resulting drag on the cart | $F_{cart}$ | about 0.16 N mean, up to 0.39 N over an episode |
-
 The cart has twice the pole's frontal cross-sectional area. The same wind model is used in training and inference.
 
 ![Wind speed and drag forces on the pole and cart over one 10 s episode](resources/external_forcing.png)
@@ -214,12 +192,10 @@ Both impulses are applied just before Gymnasium's Euler step.
 **Why the wind is limited to a light breeze.** Real wind has a nonzero mean, so to stay balanced the pole must lean *into* the wind. With the pole's drag and weight both acting at mid-pole, and the cart held stationary on average, the steady equilibrium lean is
 
 $$
-\sin\theta_{eq} = \frac{F}{m\,g}
+\tan\theta_{eq} = \frac{F}{m\,g}
 $$
 
-where $F$ is the drag on the pole; the cart's drag does not change the lean. The pole weighs only 0.1 kg ($m g$ = 0.98 N), so it is very sensitive to wind. At 2.5 m/s the mean drag of 0.09 N gives a lean of about 5°. At 4 m/s the lean would be about 14°, beyond the 12° failure limit: no controller could keep the pole up. The largest tolerable mean drag is $m g \sin 12° \approx 0.20$ N.
-
-The per-step kick from the wind is small compared with the agent's own push:
+where $F$ is the drag on the pole; the cart's drag does not change the lean. The pole weighs only 0.1 kg ($m g$ = 0.98 N), so it is very sensitive to wind. At 2.5 m/s the mean drag of 0.09 N gives a leaning angle of about 5°. At 4 m/s the lean would be about 13°, beyond the 12° failure limit: no controller could keep the pole up. The largest tolerable mean drag is $m g \tan 12° \approx 0.21$ N.
 
 The difficulty is that the wind pushes **persistently in one direction**. Together the pole and cart catch about 0.25 N of mean drag, so the whole system is blown downwind. The agent has to hold the pole tilted into the wind.
 
@@ -252,3 +228,31 @@ The PPO agent here has no efference copy, it acts on the delayed state alone.
 - Matplotlib
 - Pillow
 - pygame (used by Gymnasium to render the animation)
+
+## Parameters
+
+### Cart-pole
+
+| Parameter | Symbol | Value |
+|---|---|---|
+| Cart mass | $M$ | 1.0 kg |
+| Pole mass | $m$ | 0.1 kg |
+| Pole half-length | $l$ | 0.5 m (full pole 1.0 m) |
+| Gravity | $g$ | 9.8 m/s² |
+| Agent's force on the cart | $F$ | ±10 N |
+| Time step | $\Delta t$ | 0.02 s |
+
+### Wind
+
+| Parameter | Symbol | Value |
+|---|---|---|
+| Mean wind speed | $U$ | 2.5 m/s (a light breeze) |
+| Turbulence intensity | $\sigma_u / U$ | 30% ($\sigma_u$ = 0.75 m/s) |
+| Turbulence length scale | $L$ | 5 m ($T_L$ = 2 s) |
+| Air density | $\rho$ | 1.2 kg/m³ |
+| Pole: drag coefficient (cylinder) | $C_d$ | 1.2 |
+| Pole: diameter | $D$ | 2 cm (frontal area 0.02 m²) |
+| Cart: drag coefficient (cube, face-on) | $C_d$ | 1.05 |
+| Cart: side length | | 0.2 m (frontal area 0.04 m²) |
+| Resulting drag on the pole | $F_{pole}$ | about 0.09 N mean, 0.01–0.22 N over an episode |
+| Resulting drag on the cart | $F_{cart}$ | about 0.16 N mean, up to 0.39 N over an episode |
