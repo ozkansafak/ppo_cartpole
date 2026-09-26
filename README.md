@@ -1,26 +1,26 @@
 # PPO Cartpole with Wind Forcing and Perception Latency
 
-This project trains a PPO (Proximal Policy Optimization) agent to solve the classic CartPole problem in Gymnasium. Gymnasium simulates the dynamics of the cart.
+This project trains a PPO (Proximal Policy Optimization) agent to solve the classic CartPole problem in Gymnasium. Gymnasium simulates the dynamics of the environment, and provides the reward.
 
 At each time step, the agent chooses one of two actions:
 - apply a constant force to the left
 - apply a constant force to the right.
 
-The state of the environment is given by four continuous variables: $s = [x, \dot{x}, \theta, \dot{\theta}]$: the cart position and velocity, and the pole angle and angular velocity.
+The state of the environment is given by four continuous variables, $s = [x, \dot{x}, \theta, \dot{\theta}]$: the cart position and velocity, and the pole angle and angular velocity.
 
 On top of standard CartPole, I added two complications, each implemented as a Gymnasium wrapper in the notebook:
 
-1. **External forcing**. A steady mean wind plus random turbulent gusts blows on the pole and the cart, which produce aerodynamic drag on both. The agent only sees its effect on the cart and pole. See [External forcing: wind](#external-forcing-wind).
+1. **External forcing**. A steady mean wind plus random turbulent gusts blows on the pole and the cart, which produce aerodynamic drag on both. The agent only sees its effect on the cart and pole. [External forcing: wind](#external-forcing-wind).
 
-2. **Perception latency**. The agent sees the state $[x, \dot{x}, \theta, \dot{\theta}]$ from 2 steps ago and acts on it as if it were the current state. See [Perception latency](#perception-latency).
+2. **Perception latency**. The agent sees the state $[x, \dot{x}, \theta, \dot{\theta}]$ from 2 steps ago and acts on it as if it were the current state. [Perception latency](#perception-latency).
 
 ## Episodes, termination and reward
 
-An episode is one attempt to balance the pole for 500 ssteps or until it fails.
+An episode is one attempt to balance the pole for 500 steps or until it fails.
 
-- **Failure (termination):** the episode ends as soon as the pole tilts more than 12° from upright ($|\theta| > 0.2094$ rad) or the cart leaves the track ($|x| > 2.4$ m).
+- **Failure:** the episode ends prematurely  if the pole tilts more than 12 degrees from upright position, $|\theta| > 0.2094$ rad, or if the cart leaves the track, $|x| > 2.4$ m.
 
-- **Time limit (truncation):**  the episode is cut off at 500 steps (10 secs).
+- **Time limit:** the episode has a maximum time limit of 500 steps (10 s).
 
 - **Reward:** +1 for every step the pole stays up.
 
@@ -32,10 +32,18 @@ When the time limit of 500 steps is reached successfully, the Value function's e
 
 ## PPO agent
 
-- Actor network $\pi_\theta(a \mid s)$: outputs action probabilities from the observed state,
-- Critic network $V_\phi(s)$: estimates the expected return from that state,
+- Actor model $\pi_\theta(a \mid s)$ outputs action probabilities from the observed state,
+- Critic model $V_\phi(s)$: estimates the expected return from that state,
 
-PPO updates the actor by maximizing the clipped surrogate objective
+The true objective is the expected discounted return of the policy:
+
+$$
+J(\theta) = \mathbb{E}_{\tau \sim \pi_\theta}\Big[\sum_t \gamma^t r_t\Big]
+$$
+
+$J$ cannot be optimized directly: evaluating it for new weights $\theta$ requires collecting new episodes. PPO instead optimizes a surrogate objective computed from data collected with the previous policy $\pi_{\theta_{old}}$. Near $\theta_{old}$, the surrogate has the same gradient as $J$.
+
+PPO algorithm trains actor model by gradient ascent on the clipped objective function.
 
 $$
 L^{CLIP}(\theta) = \mathbb{E}_t\Big[\min\big(r_t(\theta)\,A_t,\ \text{clip}\big(r_t(\theta),\,1-\epsilon,\,1+\epsilon\big)\,A_t\big)\Big]
