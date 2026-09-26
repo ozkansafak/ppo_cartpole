@@ -6,19 +6,57 @@ At each time step, the agent chooses one of two actions:
 - apply a constant force to the left
 - apply a constant force to the right.
 
-On top of standard CartPole, this project adds two complications, each implemented as a Gymnasium wrapper in the notebook:
+The state of the environment is given by four continuous variables: $s = [x, \dot{x}, \theta, \dot{\theta}]$: the cart position and velocity, and the pole angle and angular velocity.
+
+On top of standard CartPole, I added two complications, each implemented as a Gymnasium wrapper in the notebook:
 
 1. **External forcing**. Wind blows on the pole and the cart: a steady mean wind plus random turbulent gusts, which produce aerodynamic drag on both. The agent never observes the wind directly; it only sees its effect on the cart and pole. See [External forcing: wind](#external-forcing-wind).
 
 2. **Perception latency**. The agent's perception lags the true state by 0.04 s (2 time steps): it sees the state $[x, \dot{x}, \theta, \dot{\theta}]$ from 2 steps ago and acts on it as if it were the current state. See [Perception latency](#perception-latency).
 
-## Why neural networks instead of a lookup table?
+## Episodes, termination and reward
 
-Tabular RL stores $Q(s,a)$ or $V(s)$ in a lookup table and updates them with Bellman equations. This method can be employed when the set of states is finite and small.
+An episode is one attempt to balance the pole for 500 ssteps or until it fails.
 
-The state $[x, \dot{x}, \theta, \dot{\theta}]$ is continuous: each variable is a real number. But time is discretized ($\Delta t = 0.02$ s) and there are only two discrete actions of the agent. A lookup table would need the state to be discretized first, and the table grows exponentially with the number of variables: with 4 variables, 20 bins each gives $20^4 = 160{,}000$ cells, and a finer 100 bins each gives $100^4 = 10^8$. Coarse bins lose the precision needed near upright, and fine bins make the table too large to fill from experience.
+- **Failure (termination):** the episode ends as soon as the pole tilts more than 12° from upright ($|\theta| > 0.2094$ rad) or the cart leaves the track ($|x| > 2.4$ m).
+- **Time limit (truncation):**  the episode is cut off at 500 steps (10 secs).
+- **Reward:** +1 for every step the pole stays up.
 
-PPO uses neural networks, which take the real-valued state directly and generalize between nearby states, and learns from sampled trajectories instead of sweeping over all states. GAE still uses Bellman style temporal-difference errors.
+The reward is +1 on every time step. Failing early results less fewer discounted future rewards.  Failing to keep within the limits of 12° and 2.4 m turns balancing pole into a learnable objective. 
+
+When balancing fails, the future rewards are zero. Actions that led toward failure get lower advantages, and the policy learns to avoid them.
+
+When the time limit of 500 steps is reached successfully, the Value function's estimate of future rewards $V(s)$ is used in place of the missing future. 
+
+## PPO agent
+
+In this project:
+
+- the actor network outputs action probabilities from the observed state,
+- the critic network estimates the expected return from that state,
+- PPO updates the policy using a clipped objective to keep learning stable.
+
+Because the state is continuous, both are neural networks, which generalize between nearby states, rather than lookup tables.
+
+Derivations of the policy gradient, the clipped objective and GAE: [PPO notes](PPO_NOTES.md).
+
+## Trained agent animation
+
+![Trained agent balancing the pole in turbulent wind](resources/cartpole_trained_rollout.gif)
+
+The GIF shows one episode of inference. 
+
+- **Deterministic policy:** at each step the agent takes its most likely action instead of sampling one as in training: $a = \arg\max_a \pi(a \mid s)$.
+
+- **Same conditions as training:** the same wind model and the same 0.04 s perception latency.
+
+- **Which episode:** the notebook first runs 20 evaluation episodes with fixed seeds 0–19 and prints the length of each. The GIF replays the longest one. With the current seeds, 11 of the 20 episodes last the full 500 steps; the other nine fail between 113 and 488 steps (median over all 20: 500). So the GIF shows a successful episode, which is slightly more common than not, but far from guaranteed.
+
+- **What is drawn:** Gymnasium renders the *true* cart–pole state, not the delayed state the agent perceives. The blue arrows show the wind as a **uniform load along the pole**, drawn like a load diagram: the arrowheads touch the upwind face of the pole, and a continuous blue line joins the tails (the load envelope). The arrows point downwind, and their length is proportional to the drag force (350 px per newton, so the mean 0.09 N gives about 30 px). The blue arrows along the full height of the cart's upwind face show the wind on the cart, at the same scale. The red arrow just below the cart is the agent's push: it points in the direction of the push, toward the side of the cart being pushed. The push is always 10 N, so this arrow has a fixed length and only its direction changes. A legend at the top left identifies the red and blue arrows.
+
+- **Length:** the episode runs until it fails (see [Episodes, termination and reward](#episodes-termination-and-reward)) or reaches the 500-step (10 s) limit.
+
+- **Speed:** frames play at about 33 per second, while the simulation advances 50 steps per second ($\Delta t = 0.02$ s), so the GIF plays at about 2/3 of real time.
 
 ## Physics model
 
@@ -104,23 +142,6 @@ This is a first-order scheme with no sub-stepping. Gymnasium can also use semi-i
 
 The step size resolves the dynamics comfortably. Linearized about upright, the pole falls away exponentially at rate $\lambda = \sqrt{g \,/\, \big(l\,(\tfrac{4}{3} - \tfrac{m}{M+m})\big)} \approx 4.0\ \text{s}^{-1}$, so $\lambda\,\Delta t \approx 0.08$: about 12 steps per e-folding of the instability. Explicit Euler is not energy-conserving, but the pole never swings past 12° (see below), so the drift is negligible here.
 
-## Episodes, termination and reward
-
-An episode is one attempt to balance the pole, starting near upright and ending when it fails or after 500 steps (10 s). Each of the state variables $x, \dot{x}, \theta, \dot{\theta}$ starts uniformly random in $[-0.05, 0.05]$.
-
-- **Failure (termination):** the episode ends as soon as the pole tilts more than 12° from upright ($|\theta| > 0.2094$ rad) or the cart leaves the track ($|x| > 2.4$ m).
-- **Time limit (truncation):** otherwise the episode is cut off after 500 steps, that is 10 secs.
-- **Reward:** +1 for every step the pole stays up, so an episode's total reward is the number of steps it survived. The maximum is 500.
-
-These rules are part of the environment, so they apply every time the policy runs: during training (a failed episode triggers a reset and a new attempt) and when rendering the GIF (the recording stops at the end of the episode).
-
-**Why failure drives learning.** The reward is the same +1 on every step, so the only thing that distinguishes good behavior from bad is *when the episode ends prematurely*. Failing early means fewer discounted future rewards.  The 12° and 2.4 m limits are what turn balancing the pole into a learnable objective. 
-
-In training, the two kinds of episode endings have different effects on learning a policy:
-
-- **Failure:** Angle exceeds 12 degrees or the cart moves outside the 2.4 m section, the future reward is zero. Actions that led toward failure get lower advantages, and the policy learns to avoid them.
-
-- **Time limit:** the episode was cut off, not failed. The pole could have stayed up, so the critic's estimate of future reward $V(s)$ is used in place of the missing future (bootstrapping). Treating the 500-step cut-off as a failure would wrongly teach the agent that surviving to the end is bad.
 
 ## External forcing: wind
 
@@ -164,7 +185,7 @@ with its own drag coefficient $C_d$ and frontal area $A$ (the area facing the wi
 | Resulting drag on the pole | $F_{pole}$ | about 0.09 N mean, 0.01–0.22 N over an episode |
 | Resulting drag on the cart | $F_{cart}$ | about 0.16 N mean, up to 0.39 N over an episode |
 
-The cart has twice the pole's frontal area, so it catches more wind than the pole. The same wind model is used in training and in the GIF.
+The cart has twice the pole's frontal area. The same wind model is used in training and inference.
 
 ![Wind speed and drag forces on the pole and cart over one 10 s episode](resources/external_forcing.png)
 
@@ -226,36 +247,6 @@ The PPO agent here has no efference copy: it acts on the delayed state alone. An
 - **Perception buffer:** at reset there is no history yet, so for the first 2 steps the agent perceives the initial state.
 
 - **Random seeds:** PyTorch and NumPy are seeded with 42 at the top of the notebook, and the training environment with 42 at its first reset, so the whole notebook is reproducible: re-running it gives the same trained policy, figures and GIF. The evaluation episodes and the GIF use fixed seeds 0–19.
-
-## PPO agent
-
-In this project:
-
-- the actor network outputs action probabilities from the observed state,
-- the critic network estimates the expected return from that state,
-- PPO updates the policy using a clipped objective to keep learning stable.
-
-This is the key idea behind modern reinforcement learning: use function approximation to generalize across a huge or continuous state space.
-
-Derivations of the policy gradient, the clipped objective and GAE: [PPO notes](PPO_NOTES.md).
-
-## Trained agent animation
-
-![Trained agent balancing the pole in turbulent wind](resources/cartpole_trained_rollout.gif)
-
-The GIF shows one episode of inference. 
-
-- **Deterministic policy:** at each step the agent takes its most likely action instead of sampling one as in training: $a = \arg\max_a \pi(a \mid s)$.
-
-- **Same conditions as training:** the same wind model and the same 0.04 s perception latency.
-
-- **Which episode:** the notebook first runs 20 evaluation episodes with fixed seeds 0–19 and prints the length of each. The GIF replays the longest one. With the current seeds, 11 of the 20 episodes last the full 500 steps; the other nine fail between 113 and 488 steps (median over all 20: 500). So the GIF shows a successful episode, which is slightly more common than not, but far from guaranteed.
-
-- **What is drawn:** Gymnasium renders the *true* cart–pole state, not the delayed state the agent perceives. The blue arrows show the wind as a **uniform load along the pole**, drawn like a load diagram: the arrowheads touch the upwind face of the pole, and a continuous blue line joins the tails (the load envelope). The arrows point downwind, and their length is proportional to the drag force (350 px per newton, so the mean 0.09 N gives about 30 px). The blue arrows along the full height of the cart's upwind face show the wind on the cart, at the same scale. The red arrow just below the cart is the agent's push: it points in the direction of the push, toward the side of the cart being pushed. The push is always 10 N, so this arrow has a fixed length and only its direction changes. A legend at the top left identifies the red and blue arrows.
-
-- **Length:** the episode runs until it fails (see [Episodes, termination and reward](#episodes-termination-and-reward)) or reaches the 500-step (10 s) limit.
-
-- **Speed:** frames play at about 33 per second, while the simulation advances 50 steps per second ($\Delta t = 0.02$ s), so the GIF plays at about 2/3 of real time.
 
 ## Project contents
 
