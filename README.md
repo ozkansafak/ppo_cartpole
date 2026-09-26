@@ -10,16 +10,18 @@ The state of the environment is given by four continuous variables: $s = [x, \do
 
 On top of standard CartPole, I added two complications, each implemented as a Gymnasium wrapper in the notebook:
 
-1. **External forcing**. Wind blows on the pole and the cart: a steady mean wind plus random turbulent gusts, which produce aerodynamic drag on both. The agent never observes the wind directly; it only sees its effect on the cart and pole. See [External forcing: wind](#external-forcing-wind).
+1. **External forcing**. A steady mean wind plus random turbulent gusts blows on the pole and the cart, which produce aerodynamic drag on both. The agent only sees its effect on the cart and pole. See [External forcing: wind](#external-forcing-wind).
 
-2. **Perception latency**. The agent's perception lags the true state by 0.04 s (2 time steps): it sees the state $[x, \dot{x}, \theta, \dot{\theta}]$ from 2 steps ago and acts on it as if it were the current state. See [Perception latency](#perception-latency).
+2. **Perception latency**. The agent sees the state $[x, \dot{x}, \theta, \dot{\theta}]$ from 2 steps ago and acts on it as if it were the current state. See [Perception latency](#perception-latency).
 
 ## Episodes, termination and reward
 
 An episode is one attempt to balance the pole for 500 ssteps or until it fails.
 
 - **Failure (termination):** the episode ends as soon as the pole tilts more than 12° from upright ($|\theta| > 0.2094$ rad) or the cart leaves the track ($|x| > 2.4$ m).
+
 - **Time limit (truncation):**  the episode is cut off at 500 steps (10 secs).
+
 - **Reward:** +1 for every step the pole stays up.
 
 The reward is +1 on every time step. Failing early results less fewer discounted future rewards.  Failing to keep within the limits of 12° and 2.4 m turns balancing pole into a learnable objective. 
@@ -30,37 +32,51 @@ When the time limit of 500 steps is reached successfully, the Value function's e
 
 ## PPO agent
 
-In this project:
+- Actor network $\pi_\theta(a \mid s)$: outputs action probabilities from the observed state,
+- Critic network $V_\phi(s)$: estimates the expected return from that state,
 
-- the actor network outputs action probabilities from the observed state,
-- the critic network estimates the expected return from that state,
-- PPO updates the policy using a clipped objective to keep learning stable.
+PPO updates the actor by maximizing the clipped surrogate objective
 
-Because the state is continuous, both are neural networks, which generalize between nearby states, rather than lookup tables.
+$$
+L^{CLIP}(\theta) = \mathbb{E}_t\Big[\min\big(r_t(\theta)\,A_t,\ \text{clip}\big(r_t(\theta),\,1-\epsilon,\,1+\epsilon\big)\,A_t\big)\Big]
+$$
+
+$$
+r_t(\theta) = \frac{\pi_\theta(a_t \mid s_t)}{\pi_{\theta_{old}}(a_t \mid s_t)}
+$$
+
+with $\epsilon = 0.2$: the clip keeps each action's probability within ±20% of its value under the policy that collected the data. 
+
+The advantage $A_t$ is computed with generalized advantage estimation (GAE):
+
+$$
+\delta_t = r_t + \gamma V_\phi(s_{t+1}) - V_\phi(s_t)
+$$
+
+$$
+A_t = \sum_{k \ge 0} (\gamma\lambda)^k\, \delta_{t+k}
+$$
+
+with $\gamma = 0.99$, $\lambda = 0.95$. The critic is fit to the returns $A_t + V_\phi(s_t)$ by mean squared error.
 
 Derivations of the policy gradient, the clipped objective and GAE: [PPO notes](PPO_NOTES.md).
 
-## Trained agent animation
+## Inference and rendering
 
 ![Trained agent balancing the pole in turbulent wind](resources/cartpole_trained_rollout.gif)
 
 The GIF shows one episode of inference. 
 
-- **Deterministic policy:** at each step the agent takes its most likely action instead of sampling one as in training: $a = \arg\max_a \pi(a \mid s)$.
+- At each step the agent takes the most likely action, $\arg\max_a \pi(a \mid s)$.
 
-- **Same conditions as training:** the same wind model and the same 0.04 s perception latency.
+- We first run 20 evaluation episodes with fixed seeds 0–19 and print the length of each. The GIF replays the longest one. With the current seeds, 11 of the 20 episodes continue for the full 500 steps, the other nine fail between 113 and 488 steps (median over all 20: 500). The GIF shows a successful episode, which is slightly more common than not.
 
-- **Which episode:** the notebook first runs 20 evaluation episodes with fixed seeds 0–19 and prints the length of each. The GIF replays the longest one. With the current seeds, 11 of the 20 episodes last the full 500 steps; the other nine fail between 113 and 488 steps (median over all 20: 500). So the GIF shows a successful episode, which is slightly more common than not, but far from guaranteed.
 
-- **What is drawn:** Gymnasium renders the *true* cart–pole state, not the delayed state the agent perceives. The blue arrows show the wind as a **uniform load along the pole**, drawn like a load diagram: the arrowheads touch the upwind face of the pole, and a continuous blue line joins the tails (the load envelope). The arrows point downwind, and their length is proportional to the drag force (350 px per newton, so the mean 0.09 N gives about 30 px). The blue arrows along the full height of the cart's upwind face show the wind on the cart, at the same scale. The red arrow just below the cart is the agent's push: it points in the direction of the push, toward the side of the cart being pushed. The push is always 10 N, so this arrow has a fixed length and only its direction changes. A legend at the top left identifies the red and blue arrows.
-
-- **Length:** the episode runs until it fails (see [Episodes, termination and reward](#episodes-termination-and-reward)) or reaches the 500-step (10 s) limit.
-
-- **Speed:** frames play at about 33 per second, while the simulation advances 50 steps per second ($\Delta t = 0.02$ s), so the GIF plays at about 2/3 of real time.
+- GIF plays at 50 Hz, one frame per simulation step ($\Delta t = 0.02$ s), so it plays in real time.
 
 ## Physics model
 
-Cartpole is a simple coupled mechanical system: a cart moves along the x-axis while a pole rotates about the pivot. The task of the agent is to keep the pole balanced even though a random lateral wind blows on the pole and the cart, and the agent perceives the state with a fixed latency (0.04 s, or 2 time steps).
+Cartpole is a simple coupled mechanical system: a cart moves along the x-axis while a pole rotates about the pivot. The task of the agent is to keep the pole balanced.
 
 Gymnasium models the pole as a uniform rod of mass $m$ and length $2l$ (its `length` parameter is $l$) on a cart of mass $M$. The angle $\theta$ is measured clockwise from upright position. With a horizontal force $F$ applied by the agent on the cart, the coupled equations of motion are:
 
@@ -98,16 +114,6 @@ $$
 m g l \sin\theta + F_{pole}\, l \cos\theta = \tfrac{4}{3} m l^2\,\ddot{\theta} + m l \cos\theta\,\ddot{x}
 $$
 
-In matrix form, with the mass matrix $\mathbf{M}(\theta)$:
-
-$$
-\underbrace{\begin{bmatrix} M+m & m l\cos\theta \\ m l\cos\theta & \tfrac{4}{3} m l^2 \end{bmatrix}}_{\mathbf{M}(\theta)}
-\begin{bmatrix} \ddot{x} \\ \ddot{\theta} \end{bmatrix}
-=
-\begin{bmatrix} F + F_{cart} + F_{pole} + m l\dot{\theta}^2\sin\theta \\ m g l\sin\theta + F_{pole}\, l\cos\theta \end{bmatrix}
-$$
-
-The diagonal entries are the inertia of each coordinate (total mass, and the pole's moment of inertia about the pivot); the off-diagonal $m l\cos\theta$ couples cart and pole. $\mathbf{M}(\theta)$ is symmetric and positive definite, so the accelerations can always be solved for.
 
 See [External forcing: wind](#external-forcing-wind) for how the wind forces are computed and applied.
 
@@ -128,7 +134,7 @@ Gymnasium advances the system in discrete time steps of $\Delta t = 0.02$ s. At 
 
 1. The agent's force $F = \pm 10$ N is held constant over the whole step.
 2. The equations of motion above are solved for $\ddot{x}$ and $\ddot{\theta}$ from the current state.
-3. The state is advanced with **explicit (forward) Euler** integration. Positions use the velocities from the *start* of the step:
+3. The state is advanced with explicit (forward) Euler integration. Positions use the velocities from the *start* of the step:
 
 $$
 x_{n+1} = x_n + \Delta t\,\dot{x}_n, \qquad \dot{x}_{n+1} = \dot{x}_n + \Delta t\,\ddot{x}_n
@@ -138,16 +144,15 @@ $$
 \theta_{n+1} = \theta_n + \Delta t\,\dot{\theta}_n, \qquad \dot{\theta}_{n+1} = \dot{\theta}_n + \Delta t\,\ddot{\theta}_n
 $$
 
-This is a first-order scheme with no sub-stepping. Gymnasium can also use semi-implicit Euler (`kinematics_integrator="semi-implicit euler"`), which updates velocities first and then advances positions with the new velocities. This project uses the default, explicit Euler.
+Gymnasium can also use semi-implicit Euler (`kinematics_integrator="semi-implicit euler"`), which updates velocities first and then advances positions with the new velocities. This project uses the default, explicit Euler.
 
-The step size resolves the dynamics comfortably. Linearized about upright, the pole falls away exponentially at rate $\lambda = \sqrt{g \,/\, \big(l\,(\tfrac{4}{3} - \tfrac{m}{M+m})\big)} \approx 4.0\ \text{s}^{-1}$, so $\lambda\,\Delta t \approx 0.08$: about 12 steps per e-folding of the instability. Explicit Euler is not energy-conserving, but the pole never swings past 12° (see below), so the drift is negligible here.
-
+Explicit Euler is not energy-conserving, but the pole never swings past 12° (see below), so the drift is negligible here.
 
 ## External forcing: wind
 
 Wind blows horizontally on the pole and the cart, modeled the way wind loads are modeled in engineering: a mean wind plus turbulent gusts, converted to forces by aerodynamic drag.
 
-The wind speed is a steady mean plus a random fluctuation:
+The wind speed is a steady mean plus random fluctuations:
 
 $$
 u(t) = U + u'(t)
@@ -159,18 +164,18 @@ $$
 S_u(f) = \sigma_u^2\,\frac{4\,T_L}{\big(1 + 70.8\,(f\,T_L)^2\big)^{5/6}}, \qquad T_L = \frac{L}{U}
 $$
 
-where $\sigma_u$ is the gust intensity and $T_L$ the integral time scale (roughly, how long a gust lasts). At high frequency the spectrum falls off as $f^{-5/3}$, Kolmogorov's inertial-range law. $u'(t)$ is synthesized as a sum of 400 Fourier modes between 0.02 and 20 Hz, with amplitudes $\sqrt{2\,S_u(f)\,\Delta f}$ and random phases. The phases are drawn fresh at the start of every episode, so every episode has different gusts with the same statistics.
+where $\sigma_u$ is the gust intensity and $T_L$ the integral time scale (the duration of turbulent wind gust). 
 
-**Drag force.** The same wind acts on both bodies. Each experiences quadratic drag
+**Drag force.** The same wind acts on both bodies. Each experiences a quadratic wind drag force:
 
 $$
 F(t) = \tfrac{1}{2}\,\rho\,C_d\,A\,|u(t)|\,u(t)
 $$
 
-with its own drag coefficient $C_d$ and frontal area $A$ (the area facing the wind):
+with its own drag coefficient $C_d$ and frontal cross-sectional area $A$ :
 
-- **Pole:** a circular cylinder, $A$ = pole diameter × pole length. The load is spread uniformly along the pole, so its resultant $F_{pole}$ acts at **mid-pole**, a height $l$ above the pivot (at $x + l\sin\theta$).
-- **Cart:** a cube whose side is 1/5 of the pole length (0.2 m), so $A$ = 0.2 m × 0.2 m. Its drag $F_{cart}$ acts on the cart itself.
+- Pole is a circular cylinder. The load is spread uniformly along the pole.
+- Cart is a cube whose side is 1/5 of the pole length (0.2 m).
 
 | Parameter | Symbol | Value |
 |---|---|---|
@@ -185,13 +190,13 @@ with its own drag coefficient $C_d$ and frontal area $A$ (the area facing the wi
 | Resulting drag on the pole | $F_{pole}$ | about 0.09 N mean, 0.01–0.22 N over an episode |
 | Resulting drag on the cart | $F_{cart}$ | about 0.16 N mean, up to 0.39 N over an episode |
 
-The cart has twice the pole's frontal area. The same wind model is used in training and inference.
+The cart has twice the pole's frontal cross-sectional area. The same wind model is used in training and inference.
 
 ![Wind speed and drag forces on the pole and cart over one 10 s episode](resources/external_forcing.png)
 
 The figure shows one 10 s episode (seeded for reproducibility). Top: the wind speed, with slow gusts lasting a few seconds and small fast fluctuations on top, as in real wind. Bottom: the resulting drag force on the cart and on the pole. The force on the cart is larger because of its larger crossectional area. Since the wind force is proportional to $u^2$, gusts are amplified. The wind varies by about ±30%, but the forces vary by more than a factor of ten.
 
-**Applying the forces.** Over one time step $\Delta t$, the wind force is applied as an impulse $J = F\,\Delta t$, which changes $\dot{x}$ and $\dot{\theta}$ through the mass matrix of the equations of motion: $\big[\Delta\dot{x},\ \Delta\dot{\theta}\big]^T = \mathbf{M}(\theta)^{-1}\,\big[J_x,\ J_\theta\big]^T$. The generalized impulse depends on where the force acts:
+**Applying the forces.** Over one time step $\Delta t$, the wind force is applied as an impulse $J = F\,\Delta t$, which changes $\dot{x}$ and $\dot{\theta}$ through the mass matrix of the equations of motion. The generalized impulse depends on where the force acts:
 
 - **Pole** (at height $l$): $(J_{pole},\; l\cos\theta\,J_{pole})$. It pushes the system and tips the pole directly.
 - **Cart** (at the cart): $(J_{cart},\; 0)$. It exerts no torque on the pole directly, but accelerating the cart tips the pole through the $\cos\theta$ coupling, just like the agent's own push.
@@ -206,16 +211,9 @@ $$
 
 where $F$ is the drag on the pole; the cart's drag does not change the lean. The pole weighs only 0.1 kg ($m g$ = 0.98 N), so it is very sensitive to wind. At 2.5 m/s the mean drag of 0.09 N gives a lean of about 5°. At 4 m/s the lean would be about 14°, beyond the 12° failure limit: no controller could keep the pole up. The largest tolerable mean drag is $m g \sin 12° \approx 0.20$ N.
 
-**What the agent has to do.** The per-step kick from the wind is small compared with the agent's own push:
+The per-step kick from the wind is small compared with the agent's own push:
 
-| Force | $\Delta\dot{\theta}$ per step |
-|---|---|
-| Agent's 10 N push on the cart | 0.29 rad/s |
-| Mean pole drag, 0.09 N at mid-pole | 0.03 rad/s |
-| Peak pole drag, 0.22 N at mid-pole | 0.06 rad/s |
-| Mean cart drag, 0.16 N on the cart | 0.005 rad/s (tips the pole the other way) |
-
-The difficulty is that the wind pushes **persistently in one direction**. Together the pole and cart catch about 0.25 N of mean drag, so the whole system is blown downwind. The agent has to hold the pole tilted into the wind and push back on average to keep the cart from drifting off the track, all while the gusts change the required lean every few seconds. Without that correction, even a good balancing controller is blown off the end of the track within a few seconds. The cart's drag adds mostly to this drift, which makes keeping the cart on the track harder.
+The difficulty is that the wind pushes **persistently in one direction**. Together the pole and cart catch about 0.25 N of mean drag, so the whole system is blown downwind. The agent has to hold the pole tilted into the wind.
 
 ## Perception latency
 
@@ -227,26 +225,9 @@ $$
 
 and it acts on it as if it were the current state. This models the time it takes to sense the cart and pole and process what it sees before acting. 
 
-| Parameter | Value |
-|---|---|
-| Perception latency, $\tau$ | 0.04 s (2 steps) |
-| Observation | $[x, \dot{x}, \theta, \dot{\theta}]$ at $t - \tau$ (4 numbers) |
+**Efference copy.** The brain faces the same problem, sensory feedback arrives 100–200 ms late. It compensates with an efference copy, an internal copy of each motor command sent to the brain regions that predict movement. Combining the delayed sensory signal with the commands issued since, it estimates the body's current state before the feedback arrives (a forward model). Autonomous vehicles do the same, under the name latency compensation.
 
-**What the delay costs.** Acting on a 40 ms-old state is not optimal: during those 2 steps the agent's own pushes and the wind have already moved the cart and pole.
-
-**Efference copy.** The brain faces the same problem: sensory feedback arrives 100–200 ms late. It compensates with an *efference copy*, an internal copy of each motor command sent to the brain regions that predict movement. Combining the delayed sensory signal with the commands issued since, it estimates the body's current state before the feedback arrives (a forward model). Autonomous vehicles do the same, under the name latency compensation.
-
-The PPO agent here has no efference copy: it acts on the delayed state alone. An earlier version gave it one, in the form of its two most recent actions (plus one extra delayed frame), so it could extrapolate to the present. With the same wind, that version kept the pole up for the full 500 steps in 18 of 20 evaluation episodes, against 11 of 20 with the pure delay.
-
-## Initial conditions
-
-- **Cart and pole:** each of $x, \dot{x}, \theta, \dot{\theta}$ is drawn uniformly from $[-0.05, 0.05]$ (m, m/s, rad, rad/s), so the pole starts within about ±2.9° of upright and nearly at rest.
-
-- **Wind:** every episode starts at $t = 0$ with new random gust phases, so each episode has a different gust history with the same statistics.
-
-- **Perception buffer:** at reset there is no history yet, so for the first 2 steps the agent perceives the initial state.
-
-- **Random seeds:** PyTorch and NumPy are seeded with 42 at the top of the notebook, and the training environment with 42 at its first reset, so the whole notebook is reproducible: re-running it gives the same trained policy, figures and GIF. The evaluation episodes and the GIF use fixed seeds 0–19.
+The PPO agent here has no efference copy, it acts on the delayed state alone.
 
 ## Project contents
 
