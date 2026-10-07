@@ -1,6 +1,23 @@
 # PPO CartPole with Wind Forcing and Perception Latency
 
-## Summary
+## Contents
+
+1. [Summary](#1-summary)
+2. [Episodes, termination and reward](#2-episodes-termination-and-reward)
+3. [PPO agent](#3-ppo-agent)
+4. [Results](#4-results)
+5. [Inference and rendering](#5-inference-and-rendering)
+6. [Physics model](#6-physics-model)
+7. [Time integration](#7-time-integration)
+8. [External forcing: wind](#8-external-forcing-wind)
+9. [Perception latency](#9-perception-latency)
+10. [How to run](#10-how-to-run)
+11. [High-level design](#11-high-level-design)
+12. [Project contents](#12-project-contents)
+13. [Environment](#13-environment)
+14. [Parameters](#14-parameters)
+
+## 1. Summary
 
 This project implements PPO (Proximal Policy Optimization)  and trains it on CartPole with two additions: turbulent wind blowing on the pole and the cart, and a 0.04 s perception latency. The agent never observes the wind and acts on a delayed state, so the problem is partially observable and harder than standard CartPole. After 300,000 training steps, 11 of 20 evaluation episodes last the full 500 steps (10 s).
 
@@ -15,11 +32,11 @@ The state of the environment is given by four continuous variables, $s = [x, \do
 
 The wind drag force and the perception latency are implemented as a Gymnasium wrapper in the notebook.
 
-1. **External forcing**. A steady mean wind plus random turbulent gusts blows on the pole and the cart, producing aerodynamic drag on both. The agent only sees its effect on the cart and pole. [External forcing: wind](#external-forcing-wind).
+1. **External forcing**. A steady mean wind plus random turbulent gusts blows on the pole and the cart, producing aerodynamic drag on both. The agent only sees its effect on the cart and pole. [External forcing: wind](#8-external-forcing-wind).
 
-2. **Perception latency**. The agent sees the state from 2 time steps ago, $o_t = s_{t-2}$, and acts on it as if it were the current state. [Perception latency](#perception-latency).
+2. **Perception latency**. The agent sees the state from 2 time steps ago, $o_t = s_{t-2}$, and acts on it as if it were the current state. [Perception latency](#9-perception-latency).
 
-## Episodes, termination and reward
+## 2. Episodes, termination and reward
 
 An episode is one attempt to balance the pole for 500 steps or until it fails.
 
@@ -35,7 +52,7 @@ When balancing fails, the future rewards are zero. Actions that led toward failu
 
 When the time limit of 500 steps is reached, the critic's estimate of future rewards $V_\phi(o)$ is used in place of the missing future, rather than treating the time limit as a failure.
 
-## PPO agent
+## 3. PPO agent
 
 - Actor model $\pi_\theta(a \mid o)$ outputs action probabilities from the observation,
 - Critic model $V_\phi(o)$ estimates the expected return from that observation.
@@ -83,13 +100,13 @@ Training loop:
 
 See my hand-written notes on the derivation of the policy gradient, the clipped objective and GAE: [PPO notes](PPO_NOTES.md).
 
-## Results
+## 4. Results
 
 ![Training diagnostics](resources/ppo_diagnostics.png)
 
 The 50 episode average reward rises to about 400 within roughly 100,000 steps and then stays between 350 and 400.
 
-## Inference and rendering
+## 5. Inference and rendering
 
 ![inference gif](resources/cartpole_trained_rollout.gif)
 
@@ -101,7 +118,7 @@ The GIF shows one episode of inference.
 
 - GIF plays in real time at 50 Hz, one frame per simulation step ($\Delta t = 0.02$ s).
 
-## Physics model
+## 6. Physics model
 
 CartPole is a simple coupled mechanical system: a cart moves along the x-axis while a pole rotates about the pivot. The task of the agent is to keep the pole balanced.
 
@@ -143,11 +160,11 @@ $$
 m g l \sin\theta + F_{pole}\, l \cos\theta = \tfrac{4}{3} m l^2\,\ddot{\theta} + m l \cos\theta\,\ddot{x}
 $$
 
-See [External forcing: wind](#external-forcing-wind) for how the wind forces are computed and applied.
+See [External forcing: wind](#8-external-forcing-wind) for how the wind forces are computed and applied.
 
 There is **no friction**: neither between the cart and the track nor at the pivot. (The original Barto et al. (1983) model had both; Gymnasium drops them.)
 
-## Time integration
+## 7. Time integration
 
 Gymnasium advances the system in discrete time steps of $\Delta t = 0.02$ s. At each step:
 
@@ -167,7 +184,7 @@ Gymnasium can also use semi-implicit Euler (`kinematics_integrator="semi-implici
 
 Explicit Euler is not energy-conserving, but the pole never swings past 12° (see below), so the drift is negligible here.
 
-## External forcing: wind
+## 8. External forcing: wind
 
 Wind blows horizontally on the pole and the cart, modeled the way wind loads are modeled in engineering: a mean wind plus turbulent gusts, converted to forces by aerodynamic drag.
 
@@ -219,7 +236,7 @@ where $F$ is the drag on the pole; the cart's drag does not change the lean. The
 
 The difficulty is that the wind pushes **persistently in one direction**. Together the pole and cart catch about 0.25 N of mean drag, so the whole system is blown downwind. The agent has to hold the pole tilted into the wind and keep the cart on the track.
 
-## Perception latency
+## 9. Perception latency
 
 The agent perceives the state $\tau = 0.04$ s (2 time steps) late. At step $n$ its only input is the state from 2 steps earlier,
 
@@ -233,7 +250,7 @@ and it acts on it as if it were the current state. This models the time it takes
 
 The PPO agent here has no efference copy or memory, it acts on the delayed state alone.
 
-## How to run
+## 10. How to run
 
 ```bash
 pip install "gymnasium[classic-control]" torch numpy matplotlib pillow jupyter
@@ -242,14 +259,53 @@ jupyter notebook ppo_cartpole.ipynb
 
 Run the cells in order. Training takes about 2 minutes on a laptop CPU. All randomness is seeded, so a re-run gives the same policy, figures and GIF.
 
-## Project contents
+## 11. High-level design
+
+The notebook runs top to bottom in four stages: building blocks, environment, training, then analysis and output.
+
+```
+┌──────────────────── BUILDING BLOCKS ─────────────────────┐
+│ PolicyNetwork  π_θ(a|o)  4 → 64 → 64 → 2  (actor)        │
+│ ValueNetwork   V_φ(o)    4 → 64 → 64 → 1  (critic)       │
+│ RolloutBuffer            one batch of experience         │
+│ compute_gae()            δ_t, A_t, returns               │
+│ ppo_update()             clipped loss + value + entropy  │
+└──────────────────────────────────────────────────────────┘
+                             │
+┌────────────────────── ENVIRONMENT ───────────────────────┐
+│ agent                                                    │
+│   ⇅                                                      │
+│ PerceptionLatency   observation o_t = s_{t-2}            │
+│   ⇅                                                      │
+│ ExternalForcing     wind drag on pole and cart           │
+│   ⇅                                                      │
+│ CartPoleEnv         ±10 N push, Euler step, limits       │
+└──────────────────────────────────────────────────────────┘
+                             │
+┌───────────────────── TRAINING LOOP ──────────────────────┐
+│ repeat ~146 times (300k steps):                          │
+│   1. collect 2,048 steps with π_θ (sampled actions)      │
+│   2. compute_gae()                                       │
+│   3. ppo_update(): 10 epochs × minibatches of 64         │
+│   4. clear buffer                                        │
+└──────────────────────────────────────────────────────────┘
+                             │
+┌────────────────── ANALYSIS AND OUTPUT ───────────────────┐
+│ training diagnostics      → ppo_diagnostics.png          │
+│ wind forcing              → external_forcing.png         │
+│ 20 seeded evaluation episodes (argmax policy)            │
+│ GIF of the longest        → cartpole_trained_rollout.gif │
+└──────────────────────────────────────────────────────────┘
+```
+
+## 12. Project contents
 
 - `ppo_cartpole.ipynb` — full PPO implementation, training loop, diagnostics, and animation export
 - `PPO_NOTES.md` — handwritten derivations
 - `pyproject.toml` — project dependencies
 - `resources/` — generated diagnostic figures and animation artifacts
 
-## Environment
+## 13. Environment
 
 - Python
 - Gymnasium
@@ -259,7 +315,7 @@ Run the cells in order. Training takes about 2 minutes on a laptop CPU. All rand
 - Pillow
 - pygame (used by Gymnasium to render the animation)
 
-## Parameters
+## 14. Parameters
 
 ### Cart-pole
 
